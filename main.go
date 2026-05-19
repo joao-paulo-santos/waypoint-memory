@@ -13,6 +13,7 @@ import (
 	"github.com/joao-paulo-santos/waypoint-memory/config"
 	"github.com/joao-paulo-santos/waypoint-memory/db"
 	"github.com/joao-paulo-santos/waypoint-memory/handlers"
+	"github.com/joao-paulo-santos/waypoint-memory/mcp"
 	"github.com/joao-paulo-santos/waypoint-memory/services"
 )
 
@@ -83,6 +84,23 @@ func main() {
 
 	wikiHandler := handlers.NewWikiHandler(projectSvc)
 	r.Mount("/api/v1/projects/{projectId}/wiki", wikiHandler.Routes())
+
+	tokenHandler := handlers.NewTokenHandler(services.NewTokenService(centralDB))
+	r.Mount("/api/v1/tokens", tokenHandler.Routes())
+
+	if !cfg.NoMCP {
+		mcpServer := mcp.NewMCPServer(
+			centralDB, projectSvc, boardHandler.BoardSvc, labelHandler.LabelSvc,
+			sprintHandler.SprintSvc, activitySvc,
+			services.NewContactService(centralDB), birthdaySvc,
+			calendarSvc, services.NewWikiService(), recurringSvc,
+		)
+		go func() {
+			if err := mcpServer.Start(cfg.MCPAddr); err != nil {
+				log.Fatalf("MCP server failed: %v", err)
+			}
+		}()
+	}
 
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
