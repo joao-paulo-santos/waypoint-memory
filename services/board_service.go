@@ -264,6 +264,14 @@ func (s *BoardService) GetTask(db *sql.DB, id int64) (*models.Task, error) {
 		return nil, ErrTaskNotFound
 	}
 	t.Done = done == 1
+
+	labels, err := (&LabelService{}).GetTaskLabels(db, t.ID)
+	if err != nil {
+		return nil, err
+	}
+	if labels != nil {
+		t.Labels = labels
+	}
 	return t, err
 }
 
@@ -380,6 +388,7 @@ func (s *BoardService) listTasksByBucket(db *sql.DB, bucketID int64) ([]models.T
 	}
 	defer rows.Close()
 
+	labelSvc := &LabelService{}
 	var tasks []models.Task
 	for rows.Next() {
 		var t models.Task
@@ -389,6 +398,14 @@ func (s *BoardService) listTasksByBucket(db *sql.DB, bucketID int64) ([]models.T
 			return nil, err
 		}
 		t.Done = done == 1
+
+		labels, err := labelSvc.GetTaskLabels(db, t.ID)
+		if err != nil {
+			return nil, err
+		}
+		if labels != nil {
+			t.Labels = labels
+		}
 		tasks = append(tasks, t)
 	}
 	return tasks, nil

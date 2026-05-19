@@ -51,6 +51,9 @@ func main() {
 	boardHandler := handlers.NewBoardHandler(projectSvc)
 	r.Mount("/api/v1/projects/{projectId}/board", boardHandler.Routes())
 
+	labelHandler := handlers.NewLabelHandler(projectSvc)
+	r.Mount("/api/v1/projects/{projectId}/labels", labelHandler.Routes())
+
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
 	fmt.Printf("Open http://localhost%s\n", addr)

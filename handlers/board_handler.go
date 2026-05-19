@@ -39,6 +39,8 @@ func (h *BoardHandler) Routes() chi.Router {
 	r.Delete("/tasks/{tid}", h.DeleteTask)
 	r.Post("/tasks/{tid}/move", h.MoveTask)
 	r.Patch("/tasks/reorder", h.ReorderTasks)
+	r.Post("/tasks/{tid}/comments", h.AddComment)
+	r.Get("/tasks/{tid}/comments", h.ListComments)
 
 	return r
 }
@@ -326,4 +328,61 @@ func (h *BoardHandler) ReorderTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *BoardHandler) AddComment(w http.ResponseWriter, r *http.Request) {
+	db, close, err := h.getProjectDB(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer close()
+
+	tid, err := strconv.ParseInt(chi.URLParam(r, "tid"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+
+	var req models.CreateCommentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	commentSvc := &services.CommentService{}
+	comment, err := commentSvc.AddComment(db, tid, req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(comment)
+}
+
+func (h *BoardHandler) ListComments(w http.ResponseWriter, r *http.Request) {
+	db, close, err := h.getProjectDB(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer close()
+
+	tid, err := strconv.ParseInt(chi.URLParam(r, "tid"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+
+	commentSvc := &services.CommentService{}
+	comments, err := commentSvc.ListComments(db, tid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"comments": comments})
 }
