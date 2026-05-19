@@ -113,6 +113,10 @@ func writeCentralError(w http.ResponseWriter, err error) {
 		code = http.StatusNotFound
 	case services.ErrBirthdayBadDate:
 		code = http.StatusBadRequest
+	case services.ErrRecurringEventNotFound:
+		code = http.StatusNotFound
+	case services.ErrInvalidRecurrence, services.ErrInvalidDate:
+		code = http.StatusBadRequest
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

@@ -69,6 +69,9 @@ func main() {
 	birthdayHandler := handlers.NewBirthdayHandler(services.NewBirthdayService(centralDB))
 	r.Mount("/api/v1/birthdays", birthdayHandler.Routes())
 
+	eventHandler := handlers.NewRecurringEventHandler(services.NewRecurringEventService(centralDB))
+	r.Mount("/api/v1/events", eventHandler.Routes())
+
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
 	fmt.Printf("Open http://localhost%s\n", addr)
