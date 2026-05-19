@@ -102,6 +102,8 @@ func main() {
 		}()
 	}
 
+	r.Handle("/*", frontendFileServer())
+
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
 	fmt.Printf("Open http://localhost%s\n", addr)

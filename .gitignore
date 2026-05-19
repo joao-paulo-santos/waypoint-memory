@@ -1,0 +1,5 @@
+frontend/node_modules/
+frontend/.svelte-kit/
+*.exe
+waypoint
+waypoint.exe
