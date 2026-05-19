@@ -63,6 +63,12 @@ func main() {
 	r.Get("/api/v1/projects/{projectId}/activity", activityHandler.ProjectActivity)
 	r.Get("/api/v1/activity", activityHandler.GlobalActivity)
 
+	contactHandler := handlers.NewContactHandler(services.NewContactService(centralDB))
+	r.Mount("/api/v1/contacts", contactHandler.Routes())
+
+	birthdayHandler := handlers.NewBirthdayHandler(services.NewBirthdayService(centralDB))
+	r.Mount("/api/v1/birthdays", birthdayHandler.Routes())
+
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
 	fmt.Printf("Open http://localhost%s\n", addr)
