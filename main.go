@@ -12,6 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/joao-paulo-santos/waypoint-memory/config"
 	"github.com/joao-paulo-santos/waypoint-memory/db"
+	"github.com/joao-paulo-santos/waypoint-memory/handlers"
+	"github.com/joao-paulo-santos/waypoint-memory/services"
 )
 
 var (
@@ -40,6 +42,11 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Get("/api/v1/health", handleHealth)
+
+	cfg.EnsureProjectsDir()
+	projectSvc := services.NewProjectService(centralDB, cfg.ProjectsDir())
+	projectHandler := handlers.NewProjectHandler(projectSvc)
+	r.Mount("/api/v1/projects", projectHandler.Routes())
 
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
