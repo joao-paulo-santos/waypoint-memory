@@ -182,12 +182,13 @@ func (s *BirthdayService) GetUpcoming(daysAhead int) ([]models.UpcomingBirthday,
 		}
 
 		results = append(results, models.UpcomingBirthday{
-			ID:         b.ID,
-			Name:       b.Name,
-			Date:       b.Date,
-			AgeTurning: ageTurning,
-			DaysUntil:  daysUntil,
-			ContactID:  b.ContactID,
+			ID:             b.ID,
+			Name:           b.Name,
+			Date:           b.Date,
+			OccurrenceDate: nextOccurrence.Format("2006-01-02"),
+			AgeTurning:     ageTurning,
+			DaysUntil:      daysUntil,
+			ContactID:      b.ContactID,
 		})
 	}
 

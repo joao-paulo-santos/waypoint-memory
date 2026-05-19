@@ -66,11 +66,20 @@ func main() {
 	contactHandler := handlers.NewContactHandler(services.NewContactService(centralDB))
 	r.Mount("/api/v1/contacts", contactHandler.Routes())
 
-	birthdayHandler := handlers.NewBirthdayHandler(services.NewBirthdayService(centralDB))
+	birthdaySvc := services.NewBirthdayService(centralDB)
+	recurringSvc := services.NewRecurringEventService(centralDB)
+
+	birthdayHandler := handlers.NewBirthdayHandler(birthdaySvc)
 	r.Mount("/api/v1/birthdays", birthdayHandler.Routes())
 
-	eventHandler := handlers.NewRecurringEventHandler(services.NewRecurringEventService(centralDB))
+	eventHandler := handlers.NewRecurringEventHandler(recurringSvc)
 	r.Mount("/api/v1/events", eventHandler.Routes())
+
+	calendarSvc := services.NewCalendarService(centralDB, projectSvc, birthdaySvc, recurringSvc)
+
+	calendarHandler := handlers.NewCalendarHandler(calendarSvc)
+	r.Get("/api/v1/calendar", calendarHandler.GetCalendar)
+	r.Get("/api/v1/calendar/today", calendarHandler.GetToday)
 
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)

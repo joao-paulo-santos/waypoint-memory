@@ -29,10 +29,11 @@ type UpdateBirthdayRequest struct {
 }
 
 type UpcomingBirthday struct {
-	ID         int64  `json:"id"`
-	Name       string `json:"name"`
-	Date       string `json:"date"`
-	AgeTurning *int   `json:"age_turning"`
-	DaysUntil  int    `json:"days_until"`
-	ContactID  *int64 `json:"contact_id"`
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Date          string `json:"date"`
+	OccurrenceDate string `json:"occurrence_date"`
+	AgeTurning    *int   `json:"age_turning"`
+	DaysUntil     int    `json:"days_until"`
+	ContactID     *int64 `json:"contact_id"`
 }
