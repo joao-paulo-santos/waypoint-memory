@@ -81,6 +81,9 @@ func main() {
 	r.Get("/api/v1/calendar", calendarHandler.GetCalendar)
 	r.Get("/api/v1/calendar/today", calendarHandler.GetToday)
 
+	wikiHandler := handlers.NewWikiHandler(projectSvc)
+	r.Mount("/api/v1/projects/{projectId}/wiki", wikiHandler.Routes())
+
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
 	fmt.Printf("Open http://localhost%s\n", addr)
