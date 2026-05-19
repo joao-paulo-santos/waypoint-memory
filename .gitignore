@@ -3,3 +3,8 @@ frontend/.svelte-kit/
 *.exe
 waypoint
 waypoint.exe
+plan.md
+executionplan.md
+phases/
+.fuse_hidden*
+frontend/build/

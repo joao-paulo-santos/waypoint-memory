@@ -2,9 +2,12 @@ package config
 
 import (
 	"flag"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -66,4 +69,34 @@ func (c *Config) EnsureDataDir() error {
 
 func (c *Config) EnsureProjectsDir() error {
 	return os.MkdirAll(c.ProjectsDir(), 0755)
+}
+
+func ResolveAddr(addr string) string {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return addr
+	}
+	for i := port; i < port+100; i++ {
+		ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(i)))
+		if err == nil {
+			ln.Close()
+			return net.JoinHostPort(host, strconv.Itoa(i))
+		}
+	}
+	return addr
+}
+
+func AddrPort(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	if strings.HasPrefix(port, "0") {
+		return ""
+	}
+	return port
 }

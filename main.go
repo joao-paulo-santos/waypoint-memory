@@ -98,9 +98,14 @@ func main() {
 		r.Mount("/v1/tokens", tokenHandler.Routes())
 	})
 
-	r.Handle("/*", frontendFileServer())
+	if !cfg.Dev {
+		r.Handle("/*", frontendFileServer())
+	}
+
+	webAddr := config.ResolveAddr(cfg.WebAddr)
 
 	if !cfg.NoMCP {
+		mcpAddr := config.ResolveAddr(cfg.MCPAddr)
 		mcpServer := mcp.NewMCPServer(
 			centralDB, projectSvc, boardHandler.BoardSvc, labelHandler.LabelSvc,
 			sprintHandler.SprintSvc, activitySvc,
@@ -108,22 +113,22 @@ func main() {
 			calendarSvc, services.NewWikiService(), recurringSvc,
 		)
 		go func() {
-			if err := mcpServer.Start(cfg.MCPAddr); err != nil {
+			if err := mcpServer.Start(mcpAddr); err != nil {
 				log.Fatalf("MCP server failed: %v", err)
 			}
 		}()
+		fmt.Printf("MCP server on http://localhost%s\n", mcpAddr)
 	}
 
-	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
-	fmt.Printf("Open http://localhost%s\n", addr)
+	fmt.Printf("Open http://localhost%s\n", webAddr)
 
 	if cfg.Open {
-		openBrowser("http://localhost" + addr)
+		openBrowser("http://localhost" + webAddr)
 	}
 
-	log.Printf("Starting server on %s", addr)
-	if err := http.ListenAndServe(addr, r); err != nil {
+	log.Printf("Starting server on %s", webAddr)
+	if err := http.ListenAndServe(webAddr, r); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
