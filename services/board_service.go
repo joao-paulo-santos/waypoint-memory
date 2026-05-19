@@ -19,7 +19,9 @@ var (
 	ErrBucketWIPLimit = errors.New("bucket has reached WIP limit")
 )
 
-type BoardService struct{}
+type BoardService struct {
+	Activity *ActivityService
+}
 
 func (s *BoardService) GetBoard(db *sql.DB) (*models.Board, error) {
 	buckets, err := s.ListBuckets(db)
@@ -93,6 +95,16 @@ func (s *BoardService) CreateBucket(db *sql.DB, req models.CreateBucketRequest) 
 	}
 
 	id, _ := result.LastInsertId()
+
+	if s.Activity != nil {
+		s.Activity.LogActivity(db, LogActivityParams{
+			Action:     "bucket_created",
+			EntityType: "bucket",
+			EntityID:   id,
+			Details:    map[string]any{"title": req.Title},
+		})
+	}
+
 	return s.GetBucket(db, id)
 }
 
@@ -143,6 +155,14 @@ func (s *BoardService) UpdateBucket(db *sql.DB, id int64, req models.UpdateBucke
 		return nil, err
 	}
 
+	if s.Activity != nil {
+		s.Activity.LogActivity(db, LogActivityParams{
+			Action:     "bucket_updated",
+			EntityType: "bucket",
+			EntityID:   id,
+		})
+	}
+
 	return s.GetBucket(db, id)
 }
 
@@ -171,7 +191,19 @@ func (s *BoardService) DeleteBucket(db *sql.DB, id int64) error {
 	}
 
 	_, err = db.Exec("DELETE FROM buckets WHERE id = ?", id)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if s.Activity != nil {
+		s.Activity.LogActivity(db, LogActivityParams{
+			Action:     "bucket_deleted",
+			EntityType: "bucket",
+			EntityID:   id,
+		})
+	}
+
+	return nil
 }
 
 func (s *BoardService) ReorderBuckets(db *sql.DB, req models.ReorderBucketsRequest) error {
@@ -246,6 +278,16 @@ func (s *BoardService) CreateTask(db *sql.DB, req models.CreateTaskRequest) (*mo
 
 	if req.Labels != "" {
 		s.setTaskLabels(db, id, req.Labels)
+	}
+
+	if s.Activity != nil {
+		s.Activity.LogActivity(db, LogActivityParams{
+			Action:     "task_created",
+			EntityType: "task",
+			EntityID:   id,
+			Actor:      req.CreatedBy,
+			Details:    map[string]any{"title": req.Title, "bucket_id": req.BucketID},
+		})
 	}
 
 	return s.GetTask(db, id)
@@ -340,6 +382,25 @@ func (s *BoardService) UpdateTask(db *sql.DB, id int64, req models.UpdateTaskReq
 		s.setTaskLabels(db, id, *req.Labels)
 	}
 
+	if s.Activity != nil {
+		action := "task_updated"
+		details := map[string]any{"task_id": id}
+		if req.Done != nil && *req.Done && !existing.Done {
+			action = "task_completed"
+		}
+		if req.BucketID != nil {
+			action = "task_moved"
+			details["from_bucket"] = existing.BucketID
+			details["to_bucket"] = *req.BucketID
+		}
+		s.Activity.LogActivity(db, LogActivityParams{
+			Action:     action,
+			EntityType: "task",
+			EntityID:   id,
+			Details:    details,
+		})
+	}
+
 	return s.GetTask(db, id)
 }
 
@@ -357,6 +418,15 @@ func (s *BoardService) DeleteTask(db *sql.DB, id int64) error {
 	if affected == 0 {
 		return ErrTaskNotFound
 	}
+
+	if s.Activity != nil {
+		s.Activity.LogActivity(db, LogActivityParams{
+			Action:     "task_deleted",
+			EntityType: "task",
+			EntityID:   id,
+		})
+	}
+
 	return nil
 }
 

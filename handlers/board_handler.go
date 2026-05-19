@@ -12,14 +12,16 @@ import (
 )
 
 type BoardHandler struct {
-	ProjectSvc *services.ProjectService
-	BoardSvc   *services.BoardService
+	ProjectSvc  *services.ProjectService
+	BoardSvc    *services.BoardService
+	CommentSvc  *services.CommentService
 }
 
-func NewBoardHandler(projectSvc *services.ProjectService) *BoardHandler {
+func NewBoardHandler(projectSvc *services.ProjectService, activitySvc *services.ActivityService) *BoardHandler {
 	return &BoardHandler{
 		ProjectSvc: projectSvc,
-		BoardSvc:   &services.BoardService{},
+		BoardSvc:   &services.BoardService{Activity: activitySvc},
+		CommentSvc: &services.CommentService{Activity: activitySvc},
 	}
 }
 
@@ -350,7 +352,7 @@ func (h *BoardHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commentSvc := &services.CommentService{}
+	commentSvc := h.CommentSvc
 	comment, err := commentSvc.AddComment(db, tid, req)
 	if err != nil {
 		writeError(w, err)
@@ -376,7 +378,7 @@ func (h *BoardHandler) ListComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commentSvc := &services.CommentService{}
+	commentSvc := h.CommentSvc
 	comments, err := commentSvc.ListComments(db, tid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

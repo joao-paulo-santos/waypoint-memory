@@ -12,7 +12,9 @@ var (
 	ErrCommentBodyEmpty = errors.New("comment body is required")
 )
 
-type CommentService struct{}
+type CommentService struct {
+	Activity *ActivityService
+}
 
 func (s *CommentService) ListComments(db *sql.DB, taskID int64) ([]models.Comment, error) {
 	rows, err := db.Query(
@@ -54,6 +56,16 @@ func (s *CommentService) AddComment(db *sql.DB, taskID int64, req models.CreateC
 	}
 
 	id, _ := result.LastInsertId()
+
+	if s.Activity != nil {
+		s.Activity.LogActivity(db, LogActivityParams{
+			Action:     "comment_added",
+			EntityType: "comment",
+			EntityID:   id,
+			Actor:      req.Author,
+			Details:    map[string]any{"task_id": taskID},
+		})
+	}
 
 	var c models.Comment
 	err = db.QueryRow(

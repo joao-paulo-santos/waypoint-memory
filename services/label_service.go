@@ -12,7 +12,9 @@ var (
 	ErrLabelDuplicate = errors.New("label title already exists")
 )
 
-type LabelService struct{}
+type LabelService struct {
+	Activity *ActivityService
+}
 
 func (s *LabelService) ListLabels(db *sql.DB) ([]models.Label, error) {
 	rows, err := db.Query(
@@ -48,6 +50,16 @@ func (s *LabelService) CreateLabel(db *sql.DB, req models.CreateLabelRequest) (*
 	}
 
 	id, _ := result.LastInsertId()
+
+	if s.Activity != nil {
+		s.Activity.LogActivity(db, LogActivityParams{
+			Action:     "label_created",
+			EntityType: "label",
+			EntityID:   id,
+			Details:    map[string]any{"title": req.Title},
+		})
+	}
+
 	return s.GetLabel(db, id)
 }
 
@@ -71,6 +83,15 @@ func (s *LabelService) DeleteLabel(db *sql.DB, id int64) error {
 	if affected == 0 {
 		return ErrLabelNotFound
 	}
+
+	if s.Activity != nil {
+		s.Activity.LogActivity(db, LogActivityParams{
+			Action:     "label_deleted",
+			EntityType: "label",
+			EntityID:   id,
+		})
+	}
+
 	return nil
 }
 

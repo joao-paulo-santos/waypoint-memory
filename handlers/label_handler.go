@@ -16,10 +16,10 @@ type LabelHandler struct {
 	LabelSvc   *services.LabelService
 }
 
-func NewLabelHandler(projectSvc *services.ProjectService) *LabelHandler {
+func NewLabelHandler(projectSvc *services.ProjectService, activitySvc *services.ActivityService) *LabelHandler {
 	return &LabelHandler{
 		ProjectSvc: projectSvc,
-		LabelSvc:   &services.LabelService{},
+		LabelSvc:   &services.LabelService{Activity: activitySvc},
 	}
 }
 

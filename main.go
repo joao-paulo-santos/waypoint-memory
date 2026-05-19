@@ -48,14 +48,20 @@ func main() {
 	projectHandler := handlers.NewProjectHandler(projectSvc)
 	r.Mount("/api/v1/projects", projectHandler.Routes())
 
-	boardHandler := handlers.NewBoardHandler(projectSvc)
+	activitySvc := services.NewActivityService()
+
+	boardHandler := handlers.NewBoardHandler(projectSvc, activitySvc)
 	r.Mount("/api/v1/projects/{projectId}/board", boardHandler.Routes())
 
-	labelHandler := handlers.NewLabelHandler(projectSvc)
+	labelHandler := handlers.NewLabelHandler(projectSvc, activitySvc)
 	r.Mount("/api/v1/projects/{projectId}/labels", labelHandler.Routes())
 
 	sprintHandler := handlers.NewSprintHandler(projectSvc)
 	r.Mount("/api/v1/projects/{projectId}/sprints", sprintHandler.Routes())
+
+	activityHandler := handlers.NewActivityHandler(projectSvc, activitySvc)
+	r.Get("/api/v1/projects/{projectId}/activity", activityHandler.ProjectActivity)
+	r.Get("/api/v1/activity", activityHandler.GlobalActivity)
 
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
