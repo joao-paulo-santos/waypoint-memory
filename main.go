@@ -54,6 +54,9 @@ func main() {
 	labelHandler := handlers.NewLabelHandler(projectSvc)
 	r.Mount("/api/v1/projects/{projectId}/labels", labelHandler.Routes())
 
+	sprintHandler := handlers.NewSprintHandler(projectSvc)
+	r.Mount("/api/v1/projects/{projectId}/sprints", sprintHandler.Routes())
+
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
 	fmt.Printf("Open http://localhost%s\n", addr)
