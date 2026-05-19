@@ -1,1 +1,0 @@
-import{a as t,f as r}from"../chunks/Ddpr-Atr.js";import"../chunks/BxHlulvg.js";import{ad as e}from"../chunks/DMZRaLpu.js";var m=r('<h2 class="text-2xl font-bold mb-4">Dashboard</h2> <p class="text-gray-400">Loading overview...</p>',1);function f(a){var o=m();e(2),t(a,o)}export{f as component};

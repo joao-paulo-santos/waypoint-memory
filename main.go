@@ -41,52 +41,64 @@ func main() {
 	}
 	defer centralDB.Close()
 
-	r := chi.NewRouter()
-	r.Get("/api/v1/health", handleHealth)
+	authSvc := services.NewAuthService(centralDB)
+	authHandler := handlers.NewAuthHandler(authSvc)
 
 	cfg.EnsureProjectsDir()
 	projectSvc := services.NewProjectService(centralDB, cfg.ProjectsDir())
-	projectHandler := handlers.NewProjectHandler(projectSvc)
-	r.Mount("/api/v1/projects", projectHandler.Routes())
-
 	activitySvc := services.NewActivityService()
-
-	boardHandler := handlers.NewBoardHandler(projectSvc, activitySvc)
-	r.Mount("/api/v1/projects/{projectId}/board", boardHandler.Routes())
-
-	labelHandler := handlers.NewLabelHandler(projectSvc, activitySvc)
-	r.Mount("/api/v1/projects/{projectId}/labels", labelHandler.Routes())
-
-	sprintHandler := handlers.NewSprintHandler(projectSvc)
-	r.Mount("/api/v1/projects/{projectId}/sprints", sprintHandler.Routes())
-
-	activityHandler := handlers.NewActivityHandler(projectSvc, activitySvc)
-	r.Get("/api/v1/projects/{projectId}/activity", activityHandler.ProjectActivity)
-	r.Get("/api/v1/activity", activityHandler.GlobalActivity)
-
-	contactHandler := handlers.NewContactHandler(services.NewContactService(centralDB))
-	r.Mount("/api/v1/contacts", contactHandler.Routes())
-
 	birthdaySvc := services.NewBirthdayService(centralDB)
 	recurringSvc := services.NewRecurringEventService(centralDB)
-
-	birthdayHandler := handlers.NewBirthdayHandler(birthdaySvc)
-	r.Mount("/api/v1/birthdays", birthdayHandler.Routes())
-
-	eventHandler := handlers.NewRecurringEventHandler(recurringSvc)
-	r.Mount("/api/v1/events", eventHandler.Routes())
-
 	calendarSvc := services.NewCalendarService(centralDB, projectSvc, birthdaySvc, recurringSvc)
 
-	calendarHandler := handlers.NewCalendarHandler(calendarSvc)
-	r.Get("/api/v1/calendar", calendarHandler.GetCalendar)
-	r.Get("/api/v1/calendar/today", calendarHandler.GetToday)
+	boardHandler := handlers.NewBoardHandler(projectSvc, activitySvc)
+	labelHandler := handlers.NewLabelHandler(projectSvc, activitySvc)
+	sprintHandler := handlers.NewSprintHandler(projectSvc)
 
-	wikiHandler := handlers.NewWikiHandler(projectSvc)
-	r.Mount("/api/v1/projects/{projectId}/wiki", wikiHandler.Routes())
+	r := chi.NewRouter()
 
-	tokenHandler := handlers.NewTokenHandler(services.NewTokenService(centralDB))
-	r.Mount("/api/v1/tokens", tokenHandler.Routes())
+	r.Post("/api/v1/auth/login", authHandler.Login)
+	r.Post("/api/v1/auth/logout", authHandler.Logout)
+	r.Get("/api/v1/auth/status", authHandler.Status)
+	r.Post("/api/v1/auth/set-password", authHandler.SetPassword)
+
+	r.Route("/api", func(r chi.Router) {
+		r.Use(handlers.AuthMiddleware(authSvc))
+
+		r.Get("/v1/health", handleHealth)
+
+		projectHandler := handlers.NewProjectHandler(projectSvc)
+		r.Mount("/v1/projects", projectHandler.Routes())
+
+		r.Mount("/v1/projects/{projectId}/board", boardHandler.Routes())
+		r.Mount("/v1/projects/{projectId}/labels", labelHandler.Routes())
+		r.Mount("/v1/projects/{projectId}/sprints", sprintHandler.Routes())
+
+		activityHandler := handlers.NewActivityHandler(projectSvc, activitySvc)
+		r.Get("/v1/projects/{projectId}/activity", activityHandler.ProjectActivity)
+		r.Get("/v1/activity", activityHandler.GlobalActivity)
+
+		contactHandler := handlers.NewContactHandler(services.NewContactService(centralDB))
+		r.Mount("/v1/contacts", contactHandler.Routes())
+
+		birthdayHandler := handlers.NewBirthdayHandler(birthdaySvc)
+		r.Mount("/v1/birthdays", birthdayHandler.Routes())
+
+		eventHandler := handlers.NewRecurringEventHandler(recurringSvc)
+		r.Mount("/v1/events", eventHandler.Routes())
+
+		calendarHandler := handlers.NewCalendarHandler(calendarSvc)
+		r.Get("/v1/calendar", calendarHandler.GetCalendar)
+		r.Get("/v1/calendar/today", calendarHandler.GetToday)
+
+		wikiHandler := handlers.NewWikiHandler(projectSvc)
+		r.Mount("/v1/projects/{projectId}/wiki", wikiHandler.Routes())
+
+		tokenHandler := handlers.NewTokenHandler(services.NewTokenService(centralDB))
+		r.Mount("/v1/tokens", tokenHandler.Routes())
+	})
+
+	r.Handle("/*", frontendFileServer())
 
 	if !cfg.NoMCP {
 		mcpServer := mcp.NewMCPServer(
@@ -101,8 +113,6 @@ func main() {
 			}
 		}()
 	}
-
-	r.Handle("/*", frontendFileServer())
 
 	addr := cfg.WebAddr
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)

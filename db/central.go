@@ -92,6 +92,11 @@ func createCentralTables(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_recurring_events_date ON recurring_events(date);
 
+	CREATE TABLE IF NOT EXISTS app_config (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	);
+
 	CREATE TABLE IF NOT EXISTS api_tokens (
 		id          INTEGER PRIMARY KEY AUTOINCREMENT,
 		name        TEXT    NOT NULL,
