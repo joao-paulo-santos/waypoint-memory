@@ -10,18 +10,17 @@ import (
 	"github.com/joao-paulo-santos/waypoint-memory/services"
 )
 
-type RecurringEventHandler struct {
-	Svc *services.RecurringEventService
+type EventHandler struct {
+	Svc *services.EventService
 }
 
-func NewRecurringEventHandler(svc *services.RecurringEventService) *RecurringEventHandler {
-	return &RecurringEventHandler{Svc: svc}
+func NewEventHandler(svc *services.EventService) *EventHandler {
+	return &EventHandler{Svc: svc}
 }
 
-func (h *RecurringEventHandler) Routes() chi.Router {
+func (h *EventHandler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/", h.List)
-	r.Get("/upcoming", h.Upcoming)
 	r.Post("/", h.Create)
 	r.Route("/{eid}", func(r chi.Router) {
 		r.Get("/", h.Get)
@@ -31,8 +30,8 @@ func (h *RecurringEventHandler) Routes() chi.Router {
 	return r
 }
 
-func (h *RecurringEventHandler) List(w http.ResponseWriter, r *http.Request) {
-	events, err := h.Svc.List()
+func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
+	events, err := h.Svc.List(getUserID(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -41,29 +40,13 @@ func (h *RecurringEventHandler) List(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"events": events})
 }
 
-func (h *RecurringEventHandler) Upcoming(w http.ResponseWriter, r *http.Request) {
-	days := 30
-	if d := r.URL.Query().Get("days"); d != "" {
-		if parsed, err := strconv.Atoi(d); err == nil {
-			days = parsed
-		}
-	}
-	results, err := h.Svc.GetUpcoming(days)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"events": results})
-}
-
-func (h *RecurringEventHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var req models.CreateRecurringEventRequest
+func (h *EventHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var req models.CreateEventRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	event, err := h.Svc.Create(req)
+	event, err := h.Svc.Create(req, getUserID(r))
 	if err != nil {
 		writeCentralError(w, err)
 		return
@@ -73,13 +56,13 @@ func (h *RecurringEventHandler) Create(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(event)
 }
 
-func (h *RecurringEventHandler) Get(w http.ResponseWriter, r *http.Request) {
+func (h *EventHandler) Get(w http.ResponseWriter, r *http.Request) {
 	eid, err := strconv.ParseInt(chi.URLParam(r, "eid"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid event id", http.StatusBadRequest)
 		return
 	}
-	event, err := h.Svc.GetByID(eid)
+	event, err := h.Svc.GetByID(eid, getUserID(r))
 	if err != nil {
 		writeCentralError(w, err)
 		return
@@ -88,18 +71,18 @@ func (h *RecurringEventHandler) Get(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(event)
 }
 
-func (h *RecurringEventHandler) Update(w http.ResponseWriter, r *http.Request) {
+func (h *EventHandler) Update(w http.ResponseWriter, r *http.Request) {
 	eid, err := strconv.ParseInt(chi.URLParam(r, "eid"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid event id", http.StatusBadRequest)
 		return
 	}
-	var req models.UpdateRecurringEventRequest
+	var req models.UpdateEventRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	event, err := h.Svc.Update(eid, req)
+	event, err := h.Svc.Update(eid, getUserID(r), req)
 	if err != nil {
 		writeCentralError(w, err)
 		return
@@ -108,13 +91,13 @@ func (h *RecurringEventHandler) Update(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(event)
 }
 
-func (h *RecurringEventHandler) Delete(w http.ResponseWriter, r *http.Request) {
+func (h *EventHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	eid, err := strconv.ParseInt(chi.URLParam(r, "eid"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid event id", http.StatusBadRequest)
 		return
 	}
-	if err := h.Svc.Delete(eid); err != nil {
+	if err := h.Svc.Delete(eid, getUserID(r)); err != nil {
 		writeCentralError(w, err)
 		return
 	}

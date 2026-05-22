@@ -2,7 +2,9 @@ package models
 
 type Task struct {
 	ID          int64    `json:"id"`
+	ProjectID   int64    `json:"project_id"`
 	BucketID    int64    `json:"bucket_id"`
+	SprintID    *int64   `json:"sprint_id"`
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
 	Position    float64  `json:"position"`

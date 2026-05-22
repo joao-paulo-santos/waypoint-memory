@@ -77,20 +77,20 @@
 	<div class="bg-gray-800 rounded-lg p-4 mb-4">
 		<div class="flex gap-3 items-end">
 			<div class="flex-1">
-				<label class="block text-sm text-gray-400 mb-1">Title</label>
-				<input bind:value={newTitle} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" placeholder="Label title" />
+				<label for="label-title" class="block text-sm text-gray-400 mb-1">Title</label>
+				<input id="label-title" bind:value={newTitle} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" placeholder="Label title" />
 			</div>
 			<div class="w-48">
-				<label class="block text-sm text-gray-400 mb-1">Color</label>
+				<label for="label-color" class="block text-sm text-gray-400 mb-1">Color</label>
 				<div class="flex items-center gap-2">
-					<input type="color" bind:value={newColor} class="w-8 h-8 rounded cursor-pointer border-0 bg-transparent" />
+					<input id="label-color" type="color" bind:value={newColor} class="w-8 h-8 rounded cursor-pointer border-0 bg-transparent" />
 					<input bind:value={newColor} class="flex-1 p-2 bg-gray-700 border border-gray-600 rounded text-sm font-mono" />
 				</div>
 			</div>
 		</div>
 		<div class="mt-2">
-			<label class="block text-sm text-gray-400 mb-1">Description (optional)</label>
-			<input bind:value={newDesc} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" placeholder="Optional description" />
+			<label for="label-desc" class="block text-sm text-gray-400 mb-1">Description (optional)</label>
+			<input id="label-desc" bind:value={newDesc} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" placeholder="Optional description" />
 		</div>
 		<div class="mt-2 flex gap-1.5 flex-wrap">
 			{#each palette as color}

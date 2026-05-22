@@ -8,7 +8,7 @@
 	let search = $state('');
 
 	let showModal = $state(false);
-	let form = $state({ first_name: '', last_name: '', email: '', phone: '', company: '', role: '', notes: '', tags: '' });
+	let form = $state({ first_name: '', last_name: '', email: '', phone: '', company: '', role: '', notes: '', tags: '', birthday_month: '', birthday_day: '', birthday_year: '', birthday_notes: '' });
 
 	async function load() {
 		loading = true;
@@ -40,8 +40,18 @@
 	async function createContact() {
 		if (!form.first_name.trim()) return;
 		try {
-			await api.post('/api/v1/contacts', form);
-			form = { first_name: '', last_name: '', email: '', phone: '', company: '', role: '', notes: '', tags: '' };
+			const body = { ...form };
+			if (body.birthday_month && body.birthday_day) {
+				body.birthday_date = `${body.birthday_month}-${body.birthday_day}`;
+			}
+			delete body.birthday_month;
+			delete body.birthday_day;
+			if (body.birthday_year) body.birthday_year = parseInt(body.birthday_year);
+			else delete body.birthday_year;
+			if (!body.birthday_date) delete body.birthday_date;
+			if (!body.birthday_notes) delete body.birthday_notes;
+			await api.post('/api/v1/contacts', body);
+			form = { first_name: '', last_name: '', email: '', phone: '', company: '', role: '', notes: '', tags: '', birthday_month: '', birthday_day: '', birthday_year: '', birthday_notes: '' };
 			showModal = false;
 			await load();
 		} catch (e) {
@@ -52,6 +62,18 @@
 	function parseTags(tags) {
 		if (!tags) return [];
 		return tags.split(',').map((t) => t.trim()).filter(Boolean);
+	}
+
+	function formatBirthday(c) {
+		if (!c.birthday_date) return '';
+		const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+		const parts = c.birthday_date.split('-');
+		if (parts.length !== 2) return c.birthday_date;
+		const m = parseInt(parts[0]) - 1;
+		const d = parts[1];
+		let str = `${months[m]} ${d}`;
+		if (c.birthday_year) str += `, ${c.birthday_year}`;
+		return str;
 	}
 </script>
 
@@ -85,6 +107,9 @@
 				{#if contact.email}
 					<p class="text-sm text-gray-500 mt-2">{contact.email}</p>
 				{/if}
+				{#if contact.birthday_date}
+					<p class="text-sm text-purple-400 mt-1">🎂 {formatBirthday(contact)}</p>
+				{/if}
 				{#if parseTags(contact.tags).length > 0}
 					<div class="flex gap-1 mt-2 flex-wrap">
 						{#each parseTags(contact.tags) as tag}
@@ -98,8 +123,10 @@
 {/if}
 
 {#if showModal}
-	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onclick={() => (showModal = false)}>
-		<div class="bg-gray-800 rounded-lg p-6 w-[500px] max-h-[80vh] overflow-y-auto" onclick={(e) => e.stopPropagation()}>
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onclick={() => (showModal = false)} onkeydown={(e) => { if (e.key === 'Escape') showModal = false; }}>
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="bg-gray-800 rounded-lg p-6 w-[500px] max-h-[80vh] overflow-y-auto" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<h3 class="text-lg font-bold mb-4">Add Contact</h3>
 			<div class="space-y-3">
 				<div class="flex gap-3">
@@ -131,6 +158,44 @@
 						<label for="c-role" class="block text-sm text-gray-400 mb-1">Role</label>
 						<input id="c-role" bind:value={form.role} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" />
 					</div>
+				</div>
+				<div class="flex gap-3">
+					<div class="flex-1">
+						<label for="c-bmonth" class="block text-sm text-gray-400 mb-1">Birthday Month</label>
+						<select id="c-bmonth" bind:value={form.birthday_month} class="w-full p-2 bg-gray-700 border border-gray-600 rounded">
+							<option value="">--</option>
+							<option value="01">January</option>
+							<option value="02">February</option>
+							<option value="03">March</option>
+							<option value="04">April</option>
+							<option value="05">May</option>
+							<option value="06">June</option>
+							<option value="07">July</option>
+							<option value="08">August</option>
+							<option value="09">September</option>
+							<option value="10">October</option>
+							<option value="11">November</option>
+							<option value="12">December</option>
+						</select>
+					</div>
+					<div class="flex-1">
+						<label for="c-bday" class="block text-sm text-gray-400 mb-1">Birthday Day</label>
+						<select id="c-bday" bind:value={form.birthday_day} class="w-full p-2 bg-gray-700 border border-gray-600 rounded">
+							<option value="">--</option>
+							{#each Array(31) as _, i}
+								{@const d = String(i + 1).padStart(2, '0')}
+								<option value={d}>{i + 1}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="flex-1">
+						<label for="c-byear" class="block text-sm text-gray-400 mb-1">Birth Year</label>
+						<input id="c-byear" type="number" bind:value={form.birthday_year} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" placeholder="1990" />
+					</div>
+				</div>
+				<div>
+					<label for="c-bnotes" class="block text-sm text-gray-400 mb-1">Birthday Notes</label>
+					<input id="c-bnotes" bind:value={form.birthday_notes} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" placeholder="Gift ideas, preferences..." />
 				</div>
 				<div>
 					<label for="c-tags" class="block text-sm text-gray-400 mb-1">Tags (comma separated)</label>

@@ -19,7 +19,7 @@ func (h *CalendarHandler) GetCalendar(w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
 
-	result, err := h.CalendarSvc.GetCalendar(from, to)
+	result, err := h.CalendarSvc.GetCalendar(getUserID(r), from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -30,7 +30,7 @@ func (h *CalendarHandler) GetCalendar(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CalendarHandler) GetToday(w http.ResponseWriter, r *http.Request) {
-	result, err := h.CalendarSvc.GetToday()
+	result, err := h.CalendarSvc.GetToday(getUserID(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -26,7 +26,7 @@ func (h *TokenHandler) Routes() chi.Router {
 }
 
 func (h *TokenHandler) List(w http.ResponseWriter, r *http.Request) {
-	tokens, err := h.Svc.List()
+	tokens, err := h.Svc.List(getUserID(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -45,7 +45,7 @@ func (h *TokenHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.Svc.Create(req.Name, req.Permissions)
+	result, err := h.Svc.Create(req.Name, getUserID(r), req.Permissions)
 	if err != nil {
 		writeCentralError(w, err)
 		return
@@ -62,7 +62,7 @@ func (h *TokenHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	if err := h.Svc.Delete(id); err != nil {
+	if err := h.Svc.Delete(id, getUserID(r)); err != nil {
 		writeCentralError(w, err)
 		return
 	}

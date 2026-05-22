@@ -3,27 +3,41 @@
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import Toast from '$lib/Toast.svelte';
+	import api from '$lib/api';
 	import '../app.css';
 
 	let { children } = $props();
 	let loading = $state(true);
+	let user = $state(null);
 
 	onMount(async () => {
+		if ($page.url.pathname === '/login') {
+			loading = false;
+			return;
+		}
 		try {
-			const res = await fetch('/api/v1/auth/status');
-			const data = await res.json();
-			if (data.has_password && $page.url.pathname !== '/login') {
-				const testRes = await fetch('/api/v1/health');
-				if (testRes.status === 401) {
-					goto('/login');
-					return;
-				}
+			const data = await api.get('/api/v1/auth/status');
+			if (data.authenticated) {
+				user = data.user;
+			} else {
+				goto('/login');
+				return;
 			}
-		} catch {}
-		finally {
+		} catch {
+			goto('/login');
+			return;
+		} finally {
 			loading = false;
 		}
 	});
+
+	async function logout() {
+		try {
+			await api.post('/api/v1/auth/logout', {});
+		} catch {}
+		user = null;
+		goto('/login');
+	}
 </script>
 
 {#if loading}
@@ -41,8 +55,13 @@
 				<a href="/projects" class="nav-link" class:active={$page.url.pathname.startsWith('/projects')}>Projects</a>
 				<a href="/calendar" class="nav-link" class:active={$page.url.pathname === '/calendar'}>Calendar</a>
 				<a href="/contacts" class="nav-link" class:active={$page.url.pathname.startsWith('/contacts')}>Contacts</a>
-				<a href="/birthdays" class="nav-link" class:active={$page.url.pathname === '/birthdays'}>Birthdays</a>
 				<a href="/settings" class="nav-link" class:active={$page.url.pathname === '/settings'}>Settings</a>
+			</div>
+			<div class="mt-auto pt-4 border-t border-gray-700">
+				{#if user}
+					<div class="text-sm text-gray-400 mb-2">Logged in as <span class="text-white font-medium">{user.username}</span></div>
+					<button onclick={logout} class="w-full px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm text-left">Logout</button>
+				{/if}
 			</div>
 		</nav>
 		<main class="flex-1 overflow-auto p-6">

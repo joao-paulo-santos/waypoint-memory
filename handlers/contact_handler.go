@@ -31,7 +31,7 @@ func (h *ContactHandler) Routes() chi.Router {
 }
 
 func (h *ContactHandler) List(w http.ResponseWriter, r *http.Request) {
-	contacts, err := h.Svc.List()
+	contacts, err := h.Svc.List(getUserID(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -46,7 +46,7 @@ func (h *ContactHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	contact, err := h.Svc.Create(req)
+	contact, err := h.Svc.Create(req, getUserID(r))
 	if err != nil {
 		writeCentralError(w, err)
 		return
@@ -62,7 +62,7 @@ func (h *ContactHandler) Get(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid contact id", http.StatusBadRequest)
 		return
 	}
-	contact, err := h.Svc.GetByID(cid)
+	contact, err := h.Svc.GetByID(cid, getUserID(r))
 	if err != nil {
 		writeCentralError(w, err)
 		return
@@ -82,7 +82,7 @@ func (h *ContactHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	contact, err := h.Svc.Update(cid, req)
+	contact, err := h.Svc.Update(cid, getUserID(r), req)
 	if err != nil {
 		writeCentralError(w, err)
 		return
@@ -97,7 +97,7 @@ func (h *ContactHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid contact id", http.StatusBadRequest)
 		return
 	}
-	if err := h.Svc.Delete(cid); err != nil {
+	if err := h.Svc.Delete(cid, getUserID(r)); err != nil {
 		writeCentralError(w, err)
 		return
 	}
@@ -109,14 +109,10 @@ func writeCentralError(w http.ResponseWriter, err error) {
 	switch err {
 	case services.ErrContactNotFound:
 		code = http.StatusNotFound
-	case services.ErrBirthdayNotFound:
+	case services.ErrEventNotFound:
 		code = http.StatusNotFound
-	case services.ErrBirthdayBadDate:
-		code = http.StatusBadRequest
-	case services.ErrRecurringEventNotFound:
+	case services.ErrTokenNotFound:
 		code = http.StatusNotFound
-	case services.ErrInvalidRecurrence, services.ErrInvalidDate:
-		code = http.StatusBadRequest
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

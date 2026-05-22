@@ -12,12 +12,14 @@ import (
 )
 
 type SprintHandler struct {
+	DB         *sql.DB
 	ProjectSvc *services.ProjectService
 	SprintSvc  *services.SprintService
 }
 
-func NewSprintHandler(projectSvc *services.ProjectService) *SprintHandler {
+func NewSprintHandler(db *sql.DB, projectSvc *services.ProjectService) *SprintHandler {
 	return &SprintHandler{
+		DB:         db,
 		ProjectSvc: projectSvc,
 		SprintSvc:  &services.SprintService{},
 	}
@@ -31,13 +33,17 @@ func (h *SprintHandler) Routes() chi.Router {
 	return r
 }
 
+func (h *SprintHandler) getProjectID(r *http.Request) (int64, error) {
+	projectIDStr := chi.URLParam(r, "projectId")
+	return strconv.ParseInt(projectIDStr, 10, 64)
+}
+
 func (h *SprintHandler) EndSprint(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	var req models.EndSprintRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -45,7 +51,7 @@ func (h *SprintHandler) EndSprint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.SprintSvc.EndSprint(db, req)
+	result, err := h.SprintSvc.EndSprint(h.DB, projectID, req)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -57,14 +63,13 @@ func (h *SprintHandler) EndSprint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SprintHandler) ListSprints(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
-	sprints, err := h.SprintSvc.ListSprints(db)
+	sprints, err := h.SprintSvc.ListSprints(h.DB, projectID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -75,12 +80,11 @@ func (h *SprintHandler) ListSprints(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SprintHandler) GetSprint(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	sid, err := strconv.ParseInt(chi.URLParam(r, "sid"), 10, 64)
 	if err != nil {
@@ -88,7 +92,7 @@ func (h *SprintHandler) GetSprint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	detail, err := h.SprintSvc.GetSprintDetail(db, sid)
+	detail, err := h.SprintSvc.GetSprintDetail(h.DB, projectID, sid)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -96,17 +100,4 @@ func (h *SprintHandler) GetSprint(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(detail)
-}
-
-func (h *SprintHandler) getProjectDB(r *http.Request) (*sql.DB, func(), error) {
-	projectIDStr := chi.URLParam(r, "projectId")
-	projectID, err := strconv.ParseInt(projectIDStr, 10, 64)
-	if err != nil {
-		return nil, nil, err
-	}
-	db, err := h.ProjectSvc.GetProjectDB(projectID)
-	if err != nil {
-		return nil, nil, err
-	}
-	return db, func() { db.Close() }, nil
 }

@@ -2,13 +2,12 @@ package models
 
 type Project struct {
 	ID          int64  `json:"id"`
-	UUID        string `json:"uuid"`
+	Slug        string `json:"slug"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Path        string `json:"path"`
-	DocsPath    string `json:"docs_path"`
 	Color       string `json:"color"`
 	Icon        string `json:"icon"`
+	OwnerID     int64  `json:"owner_id"`
 	IsArchived  bool   `json:"is_archived"`
 	LastOpened  string `json:"last_opened"`
 	CreatedAt   string `json:"created_at"`
@@ -22,25 +21,9 @@ type CreateProjectRequest struct {
 	Icon        string `json:"icon,omitempty"`
 }
 
-type InitProjectRequest struct {
-	Path        string `json:"path"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	Color       string `json:"color,omitempty"`
-	Icon        string `json:"icon,omitempty"`
-}
-
-type AddProjectRequest struct {
-	Path  string `json:"path"`
-	Name  string `json:"name,omitempty"`
-	Color string `json:"color,omitempty"`
-	Icon  string `json:"icon,omitempty"`
-}
-
 type UpdateProjectRequest struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
-	DocsPath    *string `json:"docs_path,omitempty"`
 	Color       *string `json:"color,omitempty"`
 	Icon        *string `json:"icon,omitempty"`
 	IsArchived  *bool   `json:"is_archived,omitempty"`

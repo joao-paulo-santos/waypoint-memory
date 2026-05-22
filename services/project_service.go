@@ -4,182 +4,111 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/joao-paulo-santos/waypoint-memory/db"
 	"github.com/joao-paulo-santos/waypoint-memory/models"
-	"gopkg.in/yaml.v3"
 )
 
 var (
-	ErrProjectAlreadyRegistered = errors.New("project already registered at this path")
-	ErrProjectPathNotFound      = errors.New("path does not exist")
-	ErrProjectPathNotDir        = errors.New("path is not a directory")
-	ErrProjectPathNotAbsolute   = errors.New("path must be absolute")
-	ErrProjectNested            = errors.New("path is parent/child of existing project")
+	ErrProjectAlreadyRegistered = errors.New("project slug already exists")
 	ErrProjectNotFound          = errors.New("project not found")
-	ErrWaypointNotFound         = errors.New("no .waypoint/ found at path")
 )
 
 type ProjectService struct {
-	CentralDB   *sql.DB
-	ProjectsDir string
+	DB *sql.DB
 }
 
-func NewProjectService(centralDB *sql.DB, projectsDir string) *ProjectService {
-	return &ProjectService{CentralDB: centralDB, ProjectsDir: projectsDir}
+func NewProjectService(db *sql.DB) *ProjectService {
+	return &ProjectService{DB: db}
 }
 
-func (s *ProjectService) Create(req models.CreateProjectRequest) (*models.Project, error) {
+func (s *ProjectService) Create(req models.CreateProjectRequest, ownerID int64) (*models.Project, error) {
 	if req.Name == "" {
 		return nil, errors.New("name is required")
 	}
 
-	projectPath := filepath.Join(s.ProjectsDir, req.Name)
+	slug := s.generateSlug(req.Name)
+	slug = s.ensureUniqueSlug(slug)
 
-	if err := os.MkdirAll(projectPath, 0755); err != nil {
-		return nil, fmt.Errorf("create project directory: %w", err)
-	}
-
-	uuid, err := db.InitProjectDir(projectPath, req.Name, req.Description)
-	if err != nil {
-		os.RemoveAll(projectPath)
-		return nil, fmt.Errorf("init project dir: %w", err)
-	}
-
-	return s.registerProject(uuid, req.Name, req.Description, projectPath, req.Color, req.Icon)
-}
-
-func (s *ProjectService) Init(req models.InitProjectRequest) (*models.Project, error) {
-	if err := validatePath(req.Path); err != nil {
-		return nil, err
-	}
-
-	if err := s.checkNesting(req.Path); err != nil {
-		return nil, err
-	}
-
-	name := req.Name
-	if name == "" {
-		name = filepath.Base(req.Path)
-	}
-
-	uuid, err := db.InitProjectDir(req.Path, name, req.Description)
-	if err != nil {
-		return nil, fmt.Errorf("init project dir: %w", err)
-	}
-
-	return s.registerProject(uuid, name, req.Description, req.Path, req.Color, req.Icon)
-}
-
-func (s *ProjectService) Add(req models.AddProjectRequest) (*models.Project, error) {
-	if err := validatePath(req.Path); err != nil {
-		return nil, err
-	}
-
-	if err := s.checkNesting(req.Path); err != nil {
-		return nil, err
-	}
-
-	waypointDir := filepath.Join(req.Path, ".waypoint")
-	if _, err := os.Stat(waypointDir); os.IsNotExist(err) {
-		return nil, ErrWaypointNotFound
-	}
-
-	cfgData, err := os.ReadFile(filepath.Join(waypointDir, "config.yaml"))
-	if err != nil {
-		return nil, fmt.Errorf("read config.yaml: %w", err)
-	}
-
-	var cfg db.ProjectConfig
-	if err := yaml.Unmarshal(cfgData, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config.yaml: %w", err)
-	}
-
-	name := req.Name
-	if name == "" {
-		name = cfg.Project.Name
-	}
-	if name == "" {
-		name = filepath.Base(req.Path)
-	}
-
-	return s.registerProject(cfg.Project.UUID, name, cfg.Project.Description, req.Path, req.Color, req.Icon)
-}
-
-func (s *ProjectService) registerProject(uuid, name, description, path, color, icon string) (*models.Project, error) {
-	var existingID int64
-	err := s.CentralDB.QueryRow("SELECT id FROM projects WHERE path = ?", path).Scan(&existingID)
-	if err == nil {
-		return nil, ErrProjectAlreadyRegistered
-	}
-	if err != sql.ErrNoRows {
-		return nil, fmt.Errorf("check existing: %w", err)
-	}
-
-	err = s.CentralDB.QueryRow("SELECT id FROM projects WHERE uuid = ?", uuid).Scan(&existingID)
-	if err == nil {
-		_, err := s.CentralDB.Exec(
-			"UPDATE projects SET path = ?, name = ?, updated_at = datetime('now') WHERE uuid = ?",
-			path, name, uuid,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("update project path: %w", err)
-		}
-		return s.GetByID(existingID)
-	}
-
-	result, err := s.CentralDB.Exec(
-		`INSERT INTO projects (uuid, name, description, path, color, icon)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		uuid, name, description, path, color, icon,
-	)
+	var id int64
+	var isArchived bool
+	var lastOpened sql.NullString
+	var createdAt, updatedAt string
+	err := s.DB.QueryRow(
+		`INSERT INTO projects (slug, name, description, color, icon, owner_id)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 RETURNING id, is_archived, last_opened, created_at, updated_at`,
+		slug, req.Name, req.Description, req.Color, req.Icon, ownerID,
+	).Scan(&id, &isArchived, &lastOpened, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert project: %w", err)
 	}
 
-	id, _ := result.LastInsertId()
-	return s.GetByID(id)
+	if err := db.EnsureDefaultBuckets(s.DB, id); err != nil {
+		return nil, fmt.Errorf("create default buckets: %w", err)
+	}
+
+	if err := db.EnsureWikiIndex(s.DB, id); err != nil {
+		return nil, fmt.Errorf("create wiki index: %w", err)
+	}
+
+	return &models.Project{
+		ID:          id,
+		Slug:        slug,
+		Name:        req.Name,
+		Description: req.Description,
+		Color:       req.Color,
+		Icon:        req.Icon,
+		OwnerID:     ownerID,
+		IsArchived:  isArchived,
+		LastOpened:  lastOpened.String,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+	}, nil
 }
 
 func (s *ProjectService) GetByID(id int64) (*models.Project, error) {
 	p := &models.Project{}
-	err := s.CentralDB.QueryRow(
-		`SELECT id, uuid, name, description, path, docs_path, color, icon,
-		        is_archived, last_opened, created_at, updated_at
-		 FROM projects WHERE id = ?`, id,
-	).Scan(&p.ID, &p.UUID, &p.Name, &p.Description, &p.Path, &p.DocsPath,
-		&p.Color, &p.Icon, &p.IsArchived, &p.LastOpened, &p.CreatedAt, &p.UpdatedAt)
+	err := s.DB.QueryRow(
+		`SELECT id, slug, name, description, color, icon, owner_id,
+		        is_archived, COALESCE(last_opened::text, ''), created_at, updated_at
+		 FROM projects WHERE id = $1`, id,
+	).Scan(&p.ID, &p.Slug, &p.Name, &p.Description, &p.Color, &p.Icon, &p.OwnerID,
+		&p.IsArchived, &p.LastOpened, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrProjectNotFound
 	}
 	return p, err
 }
 
-func (s *ProjectService) List() ([]models.Project, error) {
-	rows, err := s.CentralDB.Query(
-		`SELECT id, uuid, name, description, path, docs_path, color, icon,
-		        is_archived, last_opened, created_at, updated_at
-		 FROM projects ORDER BY name`,
+func (s *ProjectService) GetBySlug(slug string) (*models.Project, error) {
+	p := &models.Project{}
+	err := s.DB.QueryRow(
+		`SELECT id, slug, name, description, color, icon, owner_id,
+		        is_archived, COALESCE(last_opened::text, ''), created_at, updated_at
+		 FROM projects WHERE slug = $1`, slug,
+	).Scan(&p.ID, &p.Slug, &p.Name, &p.Description, &p.Color, &p.Icon, &p.OwnerID,
+		&p.IsArchived, &p.LastOpened, &p.CreatedAt, &p.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, ErrProjectNotFound
+	}
+	return p, err
+}
+
+func (s *ProjectService) List(ownerID int64) ([]models.Project, error) {
+	rows, err := s.DB.Query(
+		`SELECT id, slug, name, description, color, icon, owner_id,
+		        is_archived, COALESCE(last_opened::text, ''), created_at, updated_at
+		 FROM projects WHERE owner_id = $1 ORDER BY name`, ownerID,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var projects []models.Project
-	for rows.Next() {
-		var p models.Project
-		if err := rows.Scan(&p.ID, &p.UUID, &p.Name, &p.Description, &p.Path,
-			&p.DocsPath, &p.Color, &p.Icon, &p.IsArchived, &p.LastOpened,
-			&p.CreatedAt, &p.UpdatedAt); err != nil {
-			return nil, err
-		}
-		projects = append(projects, p)
-	}
-	return projects, nil
+	return scanProjects(rows)
 }
 
 func (s *ProjectService) Update(id int64, req models.UpdateProjectRequest) (*models.Project, error) {
@@ -189,41 +118,43 @@ func (s *ProjectService) Update(id int64, req models.UpdateProjectRequest) (*mod
 
 	sets := []string{}
 	args := []any{}
+	paramIdx := 1
 
 	if req.Name != nil {
-		sets = append(sets, "name = ?")
+		sets = append(sets, fmt.Sprintf("name = $%d", paramIdx))
 		args = append(args, *req.Name)
+		paramIdx++
 	}
 	if req.Description != nil {
-		sets = append(sets, "description = ?")
+		sets = append(sets, fmt.Sprintf("description = $%d", paramIdx))
 		args = append(args, *req.Description)
-	}
-	if req.DocsPath != nil {
-		sets = append(sets, "docs_path = ?")
-		args = append(args, *req.DocsPath)
+		paramIdx++
 	}
 	if req.Color != nil {
-		sets = append(sets, "color = ?")
+		sets = append(sets, fmt.Sprintf("color = $%d", paramIdx))
 		args = append(args, *req.Color)
+		paramIdx++
 	}
 	if req.Icon != nil {
-		sets = append(sets, "icon = ?")
+		sets = append(sets, fmt.Sprintf("icon = $%d", paramIdx))
 		args = append(args, *req.Icon)
+		paramIdx++
 	}
 	if req.IsArchived != nil {
-		sets = append(sets, "is_archived = ?")
+		sets = append(sets, fmt.Sprintf("is_archived = $%d", paramIdx))
 		args = append(args, *req.IsArchived)
+		paramIdx++
 	}
 
 	if len(sets) == 0 {
 		return s.GetByID(id)
 	}
 
-	sets = append(sets, "updated_at = datetime('now')")
+	sets = append(sets, "updated_at = NOW()")
 	args = append(args, id)
 
-	query := "UPDATE projects SET " + strings.Join(sets, ", ") + " WHERE id = ?"
-	if _, err := s.CentralDB.Exec(query, args...); err != nil {
+	query := "UPDATE projects SET " + strings.Join(sets, ", ") + fmt.Sprintf(" WHERE id = $%d", paramIdx)
+	if _, err := s.DB.Exec(query, args...); err != nil {
 		return nil, err
 	}
 
@@ -231,7 +162,11 @@ func (s *ProjectService) Update(id int64, req models.UpdateProjectRequest) (*mod
 }
 
 func (s *ProjectService) Delete(id int64) error {
-	result, err := s.CentralDB.Exec("DELETE FROM projects WHERE id = ?", id)
+	if _, err := s.GetByID(id); err != nil {
+		return err
+	}
+
+	result, err := s.DB.Exec("DELETE FROM projects WHERE id = $1", id)
 	if err != nil {
 		return err
 	}
@@ -242,34 +177,20 @@ func (s *ProjectService) Delete(id int64) error {
 	return nil
 }
 
-func (s *ProjectService) GetProjectDB(id int64) (*sql.DB, error) {
+func (s *ProjectService) GetProjectDetail(db *sql.DB, id int64) (*models.ProjectDetail, error) {
 	p, err := s.GetByID(id)
 	if err != nil {
 		return nil, err
 	}
-	dbPath := filepath.Join(p.Path, ".waypoint", "project.db")
-	return sql.Open("sqlite", dbPath)
-}
-
-func (s *ProjectService) GetProjectDetail(id int64) (*models.ProjectDetail, error) {
-	p, err := s.GetByID(id)
-	if err != nil {
-		return nil, err
-	}
-
-	projDB, err := s.GetProjectDB(id)
-	if err != nil {
-		return nil, err
-	}
-	defer projDB.Close()
 
 	summary := models.BoardSummary{}
-	rows, err := projDB.Query(
+	rows, err := db.Query(
 		`SELECT b.title, count(t.id)
 		 FROM buckets b
-		 LEFT JOIN tasks t ON t.bucket_id = b.id
+		 LEFT JOIN tasks t ON t.bucket_id = b.id AND t.project_id = $1 AND t.sprint_id IS NULL
+		 WHERE b.project_id = $1
 		 GROUP BY b.id
-		 ORDER BY b.position`,
+		 ORDER BY b.position`, id,
 	)
 	if err != nil {
 		return nil, err
@@ -292,44 +213,48 @@ func (s *ProjectService) GetProjectDetail(id int64) (*models.ProjectDetail, erro
 	return &models.ProjectDetail{Project: *p, BoardSummary: summary}, nil
 }
 
-func validatePath(path string) error {
-	if !filepath.IsAbs(path) {
-		return ErrProjectPathNotAbsolute
-	}
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return ErrProjectPathNotFound
-	}
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return ErrProjectPathNotDir
-	}
-	return nil
+func (s *ProjectService) generateSlug(name string) string {
+	slug := strings.ToLower(name)
+	re := regexp.MustCompile(`[^a-z0-9]+`)
+	slug = re.ReplaceAllString(slug, "-")
+	slug = regexp.MustCompile(`-+`).ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+	return slug
 }
 
-func (s *ProjectService) checkNesting(path string) error {
-	rows, err := s.CentralDB.Query("SELECT path FROM projects")
+func (s *ProjectService) ensureUniqueSlug(slug string) string {
+	if s.isSlugAvailable(slug) {
+		return slug
+	}
+
+	suffix := 2
+	for {
+		candidate := fmt.Sprintf("%s-%d", slug, suffix)
+		if s.isSlugAvailable(candidate) {
+			return candidate
+		}
+		suffix++
+	}
+}
+
+func (s *ProjectService) isSlugAvailable(slug string) bool {
+	var count int
+	err := s.DB.QueryRow("SELECT count(*) FROM projects WHERE slug = $1", slug).Scan(&count)
 	if err != nil {
-		return err
+		return true
 	}
-	defer rows.Close()
+	return count == 0
+}
 
-	cleanPath := filepath.Clean(path)
+func scanProjects(rows *sql.Rows) ([]models.Project, error) {
+	var projects []models.Project
 	for rows.Next() {
-		var existing string
-		if err := rows.Scan(&existing); err != nil {
-			return err
+		var p models.Project
+		if err := rows.Scan(&p.ID, &p.Slug, &p.Name, &p.Description, &p.Color, &p.Icon,
+			&p.OwnerID, &p.IsArchived, &p.LastOpened, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
 		}
-		cleanExisting := filepath.Clean(existing)
-
-		if strings.HasPrefix(cleanPath, cleanExisting+string(os.PathSeparator)) {
-			return fmt.Errorf("%w: %q is inside %q", ErrProjectNested, cleanPath, cleanExisting)
-		}
-		if strings.HasPrefix(cleanExisting, cleanPath+string(os.PathSeparator)) {
-			return fmt.Errorf("%w: %q is parent of %q", ErrProjectNested, cleanPath, cleanExisting)
-		}
+		projects = append(projects, p)
 	}
-	return nil
+	return projects, nil
 }

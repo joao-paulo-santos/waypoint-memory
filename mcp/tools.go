@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/joao-paulo-santos/waypoint-memory/models"
@@ -33,13 +32,23 @@ func (s *MCPServer) registerTools() {
 	s.Server.AddTool(s.listContactsTool(), s.handleListContacts)
 	s.Server.AddTool(s.createContactTool(), s.handleCreateContact)
 
-	s.Server.AddTool(s.getUpcomingBirthdaysTool(), s.handleGetUpcomingBirthdays)
-	s.Server.AddTool(s.addBirthdayTool(), s.handleAddBirthday)
-
 	s.Server.AddTool(s.getCalendarTool(), s.handleGetCalendar)
 
-	s.Server.AddTool(s.listRecurringEventsTool(), s.handleListRecurringEvents)
-	s.Server.AddTool(s.createRecurringEventTool(), s.handleCreateRecurringEvent)
+	s.Server.AddTool(s.listEventsTool(), s.handleListEvents)
+	s.Server.AddTool(s.createEventTool(), s.handleCreateEvent)
+}
+
+type ctxKey string
+
+const ownerIDKey ctxKey = "owner_id"
+
+func ownerFromContext(ctx context.Context) int64 {
+	if v := ctx.Value(ownerIDKey); v != nil {
+		if id, ok := v.(int64); ok {
+			return id
+		}
+	}
+	return 0
 }
 
 // --- list_projects ---
@@ -52,7 +61,8 @@ func (s *MCPServer) listProjectsTool() mcp.Tool {
 }
 
 func (s *MCPServer) handleListProjects(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	projects, err := s.ProjectSvc.List()
+	ownerID := s.getDefaultOwnerID()
+	projects, err := s.ProjectSvc.List(ownerID)
 	if err != nil {
 		return toolError("list projects: %v", err)
 	}
@@ -66,12 +76,8 @@ func (s *MCPServer) handleListProjects(_ context.Context, _ mcp.CallToolRequest)
 	var result []projectWithCounts
 	for _, p := range projects {
 		pw := projectWithCounts{Project: p}
-		projDB, err := s.ProjectSvc.GetProjectDB(p.ID)
-		if err == nil {
-			projDB.QueryRow("SELECT count(*) FROM tasks WHERE done = 0").Scan(&pw.TaskCount)
-			projDB.QueryRow("SELECT count(*) FROM tasks WHERE done = 0 AND due_date < date('now')").Scan(&pw.OverdueCount)
-			projDB.Close()
-		}
+		s.DB.QueryRow("SELECT count(*) FROM tasks WHERE project_id = $1 AND done = FALSE", p.ID).Scan(&pw.TaskCount)
+		s.DB.QueryRow("SELECT count(*) FROM tasks WHERE project_id = $1 AND done = FALSE AND due_date < CURRENT_DATE", p.ID).Scan(&pw.OverdueCount)
 		result = append(result, pw)
 	}
 
@@ -99,17 +105,11 @@ func (s *MCPServer) handleGetProjectContext(_ context.Context, req mcp.CallToolR
 		return toolError("get project: %v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	board, _ := s.BoardSvc.GetBoard(projDB)
-	activity, _ := s.ActivitySvc.GetProjectActivity(projDB, 5)
+	board, _ := s.BoardSvc.GetBoard(s.DB, pid)
+	activity, _ := s.ActivitySvc.GetProjectActivity(s.DB, pid, 5)
 
 	var overdue []map[string]any
-	rows, err := projDB.Query("SELECT id, title, due_date FROM tasks WHERE done = 0 AND due_date < date('now')")
+	rows, err := s.DB.Query("SELECT id, title, due_date FROM tasks WHERE project_id = $1 AND done = FALSE AND due_date < CURRENT_DATE", pid)
 	if err == nil {
 		for rows.Next() {
 			var id int64
@@ -122,7 +122,7 @@ func (s *MCPServer) handleGetProjectContext(_ context.Context, req mcp.CallToolR
 	}
 
 	var dueSoon []map[string]any
-	rows2, err := projDB.Query("SELECT id, title, due_date FROM tasks WHERE done = 0 AND due_date >= date('now') AND due_date <= date('now', '+7 days')")
+	rows2, err := s.DB.Query("SELECT id, title, due_date FROM tasks WHERE project_id = $1 AND done = FALSE AND due_date >= CURRENT_DATE AND due_date <= CURRENT_DATE + INTERVAL '7 days'", pid)
 	if err == nil {
 		for rows2.Next() {
 			var id int64
@@ -143,7 +143,7 @@ func (s *MCPServer) handleGetProjectContext(_ context.Context, req mcp.CallToolR
 
 	return toolResult(map[string]any{
 		"project": map[string]any{
-			"id": project.ID, "name": project.Name, "is_archived": project.IsArchived,
+			"id": project.ID, "name": project.Name, "slug": project.Slug, "is_archived": project.IsArchived,
 		},
 		"board_summary":   boardSummary,
 		"overdue_tasks":   overdue,
@@ -167,13 +167,8 @@ func (s *MCPServer) handleListBuckets(_ context.Context, req mcp.CallToolRequest
 	if err != nil {
 		return toolError("%v", err)
 	}
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
 
-	board, err := s.BoardSvc.GetBoard(projDB)
+	board, err := s.BoardSvc.GetBoard(s.DB, pid)
 	if err != nil {
 		return toolError("get board: %v", err)
 	}
@@ -200,13 +195,7 @@ func (s *MCPServer) handleCreateBucket(_ context.Context, req mcp.CallToolReques
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	bucket, err := s.BoardSvc.CreateBucket(projDB, models.CreateBucketRequest{Title: title})
+	bucket, err := s.BoardSvc.CreateBucket(s.DB, pid, models.CreateBucketRequest{Title: title})
 	if err != nil {
 		return toolError("create bucket: %v", err)
 	}
@@ -239,13 +228,7 @@ func (s *MCPServer) handleUpdateBucket(_ context.Context, req mcp.CallToolReques
 		updateReq.Title = v
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	bucket, err := s.BoardSvc.UpdateBucket(projDB, bid, updateReq)
+	bucket, err := s.BoardSvc.UpdateBucket(s.DB, pid, bid, updateReq)
 	if err != nil {
 		return toolError("update bucket: %v", err)
 	}
@@ -273,13 +256,7 @@ func (s *MCPServer) handleDeleteBucket(_ context.Context, req mcp.CallToolReques
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	if err := s.BoardSvc.DeleteBucket(projDB, bid); err != nil {
+	if err := s.BoardSvc.DeleteBucket(s.DB, pid, bid); err != nil {
 		return toolError("delete bucket: %v", err)
 	}
 	return toolResult(map[string]string{"status": "deleted"})
@@ -314,12 +291,6 @@ func (s *MCPServer) handleCreateTask(_ context.Context, req mcp.CallToolRequest)
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
 	taskReq := models.CreateTaskRequest{
 		BucketID:    bid,
 		Title:       title,
@@ -335,7 +306,7 @@ func (s *MCPServer) handleCreateTask(_ context.Context, req mcp.CallToolRequest)
 		taskReq.Labels = lbl
 	}
 
-	task, err := s.BoardSvc.CreateTask(projDB, taskReq)
+	task, err := s.BoardSvc.CreateTask(s.DB, pid, taskReq)
 	if err != nil {
 		return toolError("create task: %v", err)
 	}
@@ -369,12 +340,6 @@ func (s *MCPServer) handleUpdateTask(_ context.Context, req mcp.CallToolRequest)
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
 	updateReq := models.UpdateTaskRequest{}
 	if v := getNullableString(req, "title"); v != nil {
 		updateReq.Title = v
@@ -398,7 +363,7 @@ func (s *MCPServer) handleUpdateTask(_ context.Context, req mcp.CallToolRequest)
 		updateReq.Labels = v
 	}
 
-	task, err := s.BoardSvc.UpdateTask(projDB, tid, updateReq)
+	task, err := s.BoardSvc.UpdateTask(s.DB, pid, tid, updateReq)
 	if err != nil {
 		return toolError("update task: %v", err)
 	}
@@ -430,13 +395,7 @@ func (s *MCPServer) handleMoveTask(_ context.Context, req mcp.CallToolRequest) (
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	task, err := s.BoardSvc.MoveTask(projDB, tid, bid)
+	task, err := s.BoardSvc.MoveTask(s.DB, pid, tid, bid)
 	if err != nil {
 		return toolError("move task: %v", err)
 	}
@@ -464,13 +423,7 @@ func (s *MCPServer) handleDeleteTask(_ context.Context, req mcp.CallToolRequest)
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	if err := s.BoardSvc.DeleteTask(projDB, tid); err != nil {
+	if err := s.BoardSvc.DeleteTask(s.DB, pid, tid); err != nil {
 		return toolError("delete task: %v", err)
 	}
 	return toolResult(map[string]string{"status": "deleted"})
@@ -493,13 +446,7 @@ func (s *MCPServer) handleArchiveSprint(_ context.Context, req mcp.CallToolReque
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	result, err := s.SprintSvc.EndSprint(projDB, models.EndSprintRequest{
+	result, err := s.SprintSvc.EndSprint(s.DB, pid, models.EndSprintRequest{
 		SprintName: getString(req, "sprint_name", ""),
 		Summary:    getString(req, "summary", ""),
 	})
@@ -525,13 +472,7 @@ func (s *MCPServer) handleListSprints(_ context.Context, req mcp.CallToolRequest
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	sprints, err := s.SprintSvc.ListSprints(projDB)
+	sprints, err := s.SprintSvc.ListSprints(s.DB, pid)
 	if err != nil {
 		return toolError("list sprints: %v", err)
 	}
@@ -559,13 +500,7 @@ func (s *MCPServer) handleGetSprint(_ context.Context, req mcp.CallToolRequest) 
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	detail, err := s.SprintSvc.GetSprintDetail(projDB, sid)
+	detail, err := s.SprintSvc.GetSprintDetail(s.DB, pid, sid)
 	if err != nil {
 		return toolError("get sprint: %v", err)
 	}
@@ -593,13 +528,7 @@ func (s *MCPServer) handleAppendProjectLog(_ context.Context, req mcp.CallToolRe
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	err = s.ActivitySvc.LogActivity(projDB, services.LogActivityParams{
+	err = s.ActivitySvc.LogActivity(s.DB, pid, services.LogActivityParams{
 		Action:     action,
 		EntityType: "custom",
 		Actor:      "ai",
@@ -628,13 +557,7 @@ func (s *MCPServer) handleGetRecentActivity(_ context.Context, req mcp.CallToolR
 		return toolError("%v", err)
 	}
 
-	projDB, err := s.ProjectSvc.GetProjectDB(pid)
-	if err != nil {
-		return toolError("open project db: %v", err)
-	}
-	defer projDB.Close()
-
-	entries, err := s.ActivitySvc.GetProjectActivity(projDB, getInt(req, "limit", 20))
+	entries, err := s.ActivitySvc.GetProjectActivity(s.DB, pid, getInt(req, "limit", 20))
 	if err != nil {
 		return toolError("get activity: %v", err)
 	}
@@ -651,7 +574,8 @@ func (s *MCPServer) listContactsTool() mcp.Tool {
 }
 
 func (s *MCPServer) handleListContacts(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	contacts, err := s.ContactSvc.List()
+	ownerID := s.getDefaultOwnerID()
+	contacts, err := s.ContactSvc.List(ownerID)
 	if err != nil {
 		return toolError("list contacts: %v", err)
 	}
@@ -674,6 +598,7 @@ func (s *MCPServer) createContactTool() mcp.Tool {
 }
 
 func (s *MCPServer) handleCreateContact(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ownerID := s.getDefaultOwnerID()
 	contact, err := s.ContactSvc.Create(models.CreateContactRequest{
 		FirstName: getString(req, "first_name", ""),
 		LastName:  getString(req, "last_name", ""),
@@ -682,62 +607,11 @@ func (s *MCPServer) handleCreateContact(_ context.Context, req mcp.CallToolReque
 		Company:   getString(req, "company", ""),
 		Role:      getString(req, "role", ""),
 		Notes:     getString(req, "notes", ""),
-	})
+	}, ownerID)
 	if err != nil {
 		return toolError("create contact: %v", err)
 	}
 	return toolResult(contact)
-}
-
-// --- get_upcoming_birthdays ---
-
-func (s *MCPServer) getUpcomingBirthdaysTool() mcp.Tool {
-	return mcp.NewTool("get_upcoming_birthdays",
-		mcp.WithDescription("Get upcoming birthdays within a date range."),
-		mcp.WithReadOnlyHintAnnotation(true),
-		mcp.WithInteger("days", mcp.Description("Days ahead (default 30)")),
-	)
-}
-
-func (s *MCPServer) handleGetUpcomingBirthdays(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	birthdays, err := s.BirthdaySvc.GetUpcoming(getInt(req, "days", 30))
-	if err != nil {
-		return toolError("get upcoming birthdays: %v", err)
-	}
-	return toolResult(map[string]any{"birthdays": birthdays})
-}
-
-// --- add_birthday ---
-
-func (s *MCPServer) addBirthdayTool() mcp.Tool {
-	return mcp.NewTool("add_birthday",
-		mcp.WithDescription("Add a birthday."),
-		mcp.WithString("name", mcp.Required(), mcp.Description("Person's name")),
-		mcp.WithString("date", mcp.Required(), mcp.Description("Date in MM-DD format")),
-		mcp.WithInteger("year", mcp.Description("Birth year")),
-		mcp.WithInteger("contact_id", mcp.Description("Linked contact ID")),
-	)
-}
-
-func (s *MCPServer) handleAddBirthday(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	createReq := models.CreateBirthdayRequest{
-		Name: getString(req, "name", ""),
-		Date: getString(req, "date", ""),
-	}
-
-	if v := getNullableInt(req, "year"); v != nil {
-		y := int(*v)
-		createReq.Year = &y
-	}
-	if v := getNullableInt(req, "contact_id"); v != nil {
-		createReq.ContactID = v
-	}
-
-	birthday, err := s.BirthdaySvc.Create(createReq)
-	if err != nil {
-		return toolError("add birthday: %v", err)
-	}
-	return toolResult(birthday)
 }
 
 // --- get_calendar ---
@@ -752,7 +626,9 @@ func (s *MCPServer) getCalendarTool() mcp.Tool {
 }
 
 func (s *MCPServer) handleGetCalendar(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ownerID := s.getDefaultOwnerID()
 	result, err := s.CalendarSvc.GetCalendar(
+		ownerID,
 		getString(req, "from", ""),
 		getString(req, "to", ""),
 	)
@@ -762,65 +638,56 @@ func (s *MCPServer) handleGetCalendar(_ context.Context, req mcp.CallToolRequest
 	return toolResult(result)
 }
 
-// --- list_recurring_events ---
+// --- list_events ---
 
-func (s *MCPServer) listRecurringEventsTool() mcp.Tool {
-	return mcp.NewTool("list_recurring_events",
-		mcp.WithDescription("List all recurring events."),
+func (s *MCPServer) listEventsTool() mcp.Tool {
+	return mcp.NewTool("list_events",
+		mcp.WithDescription("List all events."),
 		mcp.WithReadOnlyHintAnnotation(true),
 	)
 }
 
-func (s *MCPServer) handleListRecurringEvents(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	events, err := s.RecurringSvc.List()
+func (s *MCPServer) handleListEvents(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ownerID := s.getDefaultOwnerID()
+	events, err := s.EventSvc.List(ownerID)
 	if err != nil {
-		return toolError("list recurring events: %v", err)
+		return toolError("list events: %v", err)
 	}
 	return toolResult(map[string]any{"events": events})
 }
 
-// --- create_recurring_event ---
+// --- create_event ---
 
-func (s *MCPServer) createRecurringEventTool() mcp.Tool {
-	return mcp.NewTool("create_recurring_event",
-		mcp.WithDescription("Create a recurring event (yearly or monthly)."),
+func (s *MCPServer) createEventTool() mcp.Tool {
+	return mcp.NewTool("create_event",
+		mcp.WithDescription("Create an event (one-off or recurring)."),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Event title")),
-		mcp.WithString("start_date", mcp.Required(), mcp.Description("Start date (YYYY-MM-DD)")),
-		mcp.WithString("date", mcp.Required(), mcp.Description("MM-DD for yearly, DD for monthly")),
-		mcp.WithString("recurrence", mcp.Description("yearly or monthly (default yearly)")),
+		mcp.WithString("date", mcp.Required(), mcp.Description("Date (YYYY-MM-DD)")),
+		mcp.WithString("time", mcp.Description("Time (HH:MM)")),
+		mcp.WithString("recurrence", mcp.Description("yearly or monthly (omit for one-off)")),
 		mcp.WithString("category", mcp.Description("Category")),
 		mcp.WithString("description", mcp.Description("Description")),
-		mcp.WithString("end_date", mcp.Description("End date (YYYY-MM-DD)")),
 	)
 }
 
-func (s *MCPServer) handleCreateRecurringEvent(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	createReq := models.CreateRecurringEventRequest{
+func (s *MCPServer) handleCreateEvent(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ownerID := s.getDefaultOwnerID()
+	createReq := models.CreateEventRequest{
 		Title:       getString(req, "title", ""),
-		StartDate:   getString(req, "start_date", ""),
 		Date:        getString(req, "date", ""),
-		Recurrence:  getString(req, "recurrence", "yearly"),
 		Category:    getString(req, "category", ""),
 		Description: getString(req, "description", ""),
 	}
-	if v := getNullableString(req, "end_date"); v != nil {
-		createReq.EndDate = v
+	if v := getNullableString(req, "time"); v != nil {
+		createReq.Time = v
+	}
+	if v := getNullableString(req, "recurrence"); v != nil {
+		createReq.Recurrence = v
 	}
 
-	event, err := s.RecurringSvc.Create(createReq)
+	event, err := s.EventSvc.Create(createReq, ownerID)
 	if err != nil {
-		return toolError("create recurring event: %v", err)
+		return toolError("create event: %v", err)
 	}
 	return toolResult(event)
-}
-
-// --- Wiki helper ---
-
-func (s *MCPServer) getWikiPage(projectID int64, slug string) (*models.WikiPage, error) {
-	project, err := s.ProjectSvc.GetByID(projectID)
-	if err != nil {
-		return nil, err
-	}
-	waypointDir := filepath.Join(project.Path, ".waypoint")
-	return s.WikiSvc.ReadWikiPage(waypointDir, slug)
 }

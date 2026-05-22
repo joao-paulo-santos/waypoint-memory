@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -11,19 +12,18 @@ import (
 )
 
 type ProjectHandler struct {
+	DB      *sql.DB
 	Service *services.ProjectService
 }
 
-func NewProjectHandler(svc *services.ProjectService) *ProjectHandler {
-	return &ProjectHandler{Service: svc}
+func NewProjectHandler(db *sql.DB, svc *services.ProjectService) *ProjectHandler {
+	return &ProjectHandler{DB: db, Service: svc}
 }
 
 func (h *ProjectHandler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/", h.List)
-	r.Post("/create", h.Create)
-	r.Post("/init", h.Init)
-	r.Post("/add", h.Add)
+	r.Post("/", h.Create)
 	r.Route("/{id}", func(r chi.Router) {
 		r.Get("/", h.Get)
 		r.Put("/", h.Update)
@@ -39,43 +39,7 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project, err := h.Service.Create(req)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(project)
-}
-
-func (h *ProjectHandler) Init(w http.ResponseWriter, r *http.Request) {
-	var req models.InitProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	project, err := h.Service.Init(req)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(project)
-}
-
-func (h *ProjectHandler) Add(w http.ResponseWriter, r *http.Request) {
-	var req models.AddProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	project, err := h.Service.Add(req)
+	project, err := h.Service.Create(req, getUserID(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -87,7 +51,7 @@ func (h *ProjectHandler) Add(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
-	projects, err := h.Service.List()
+	projects, err := h.Service.List(getUserID(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -104,7 +68,7 @@ func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	detail, err := h.Service.GetProjectDetail(id)
+	detail, err := h.Service.GetProjectDetail(h.DB, id)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -159,12 +123,24 @@ func writeError(w http.ResponseWriter, err error) {
 		code = http.StatusNotFound
 	case services.ErrProjectAlreadyRegistered:
 		code = http.StatusConflict
-	case services.ErrProjectPathNotFound, services.ErrWaypointNotFound:
+	case services.ErrBucketNotFound:
 		code = http.StatusNotFound
-	case services.ErrProjectPathNotAbsolute, services.ErrProjectPathNotDir:
-		code = http.StatusBadRequest
-	case services.ErrProjectNested:
+	case services.ErrBucketHasTasks:
 		code = http.StatusConflict
+	case services.ErrTaskNotFound:
+		code = http.StatusNotFound
+	case services.ErrLabelNotFound:
+		code = http.StatusNotFound
+	case services.ErrLabelDuplicate:
+		code = http.StatusConflict
+	case services.ErrNoDoneBucket:
+		code = http.StatusBadRequest
+	case services.ErrEmptyDoneBucket:
+		code = http.StatusBadRequest
+	case services.ErrBucketOnlyDone:
+		code = http.StatusConflict
+	case services.ErrCommentBodyEmpty:
+		code = http.StatusBadRequest
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

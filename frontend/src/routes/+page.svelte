@@ -3,22 +3,33 @@
 	import { onMount } from 'svelte';
 
 	let projects = $state([]);
-	let birthdays = $state([]);
+	let items = $state([]);
 	let activity = $state([]);
 	let overdueTasks = $state([]);
 	let loading = $state(true);
 
+	let showTasks = $state(true);
+	let showBirthdays = $state(true);
+	let showEvents = $state(true);
+
+	let filteredItems = $derived(items.filter(i => {
+		if (i.type === 'task') return showTasks;
+		if (i.type === 'birthday') return showBirthdays;
+		if (i.type === 'event') return showEvents;
+		return true;
+	}));
+
 	async function load() {
 		loading = true;
 		try {
-			const [pData, bData, aData] = await Promise.all([
+			const [pData, uData, aData] = await Promise.all([
 				api.get('/api/v1/projects'),
-				api.get('/api/v1/birthdays/upcoming?days=7'),
+				api.get('/api/v1/upcoming?days=30'),
 				api.get('/api/v1/activity?limit=10')
 			]);
 
 			projects = pData.projects || [];
-			birthdays = bData.birthdays || [];
+			items = uData.items || [];
 			activity = aData.activity || [];
 
 			const overdueList = [];
@@ -51,6 +62,24 @@
 		return `In ${d} days`;
 	}
 
+	function typeIcon(type) {
+		switch (type) {
+			case 'task': return '📋';
+			case 'birthday': return '🎂';
+			case 'event': return '📅';
+			default: return '';
+		}
+	}
+
+	function typeColor(type) {
+		switch (type) {
+			case 'task': return 'bg-blue-500/20 text-blue-400';
+			case 'birthday': return 'bg-purple-500/20 text-purple-400';
+			case 'event': return 'bg-orange-500/20 text-orange-400';
+			default: return 'bg-gray-500/20 text-gray-400';
+		}
+	}
+
 	function parseDetails(details) {
 		try { return JSON.parse(details); } catch { return {}; }
 	}
@@ -80,22 +109,47 @@
 {:else}
 	<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 		<div>
-			<h3 class="text-lg font-semibold mb-3">Upcoming Birthdays</h3>
-			{#if birthdays.length === 0}
-				<p class="text-gray-500 text-sm">No birthdays in the next 7 days.</p>
+			<div class="flex items-center justify-between mb-3">
+				<h3 class="text-lg font-semibold">Upcoming</h3>
+				<div class="flex gap-2 text-xs">
+					<label class="flex items-center gap-1 cursor-pointer">
+						<input type="checkbox" bind:checked={showTasks} class="accent-blue-500" />
+						<span class="text-blue-400">Tasks</span>
+					</label>
+					<label class="flex items-center gap-1 cursor-pointer">
+						<input type="checkbox" bind:checked={showBirthdays} class="accent-purple-500" />
+						<span class="text-purple-400">Birthdays</span>
+					</label>
+					<label class="flex items-center gap-1 cursor-pointer">
+						<input type="checkbox" bind:checked={showEvents} class="accent-orange-500" />
+						<span class="text-orange-400">Events</span>
+					</label>
+				</div>
+			</div>
+			{#if filteredItems.length === 0}
+				<p class="text-gray-500 text-sm">No upcoming items.</p>
 			{:else}
 				<div class="space-y-2">
-					{#each birthdays as b (b.id)}
-						<div class="bg-gray-800 rounded-lg p-3 flex items-center justify-between">
-							<div class="flex items-center gap-2">
-								<span class="text-xl">&#127874;</span>
-								<span class="font-medium text-sm">{b.name}</span>
-								{#if b.age_turning != null}
-									<span class="text-xs text-purple-400">turning {b.age_turning}</span>
-								{/if}
+					{#each filteredItems as item (item.type + item.date + item.title)}
+						<a href={item.type === 'task' ? `/projects/${item.project_id}` : item.type === 'birthday' ? `/contacts/${item.contact_id}` : '#'}
+							class="block bg-gray-800 rounded-lg p-3 hover:bg-gray-750">
+							<div class="flex items-center justify-between">
+								<div class="flex items-center gap-2">
+									<span class="text-sm">{typeIcon(item.type)}</span>
+									<span class="font-medium text-sm {item.done ? 'line-through text-gray-500' : ''}">{item.title}</span>
+									{#if item.age_turning != null}
+										<span class="text-xs text-purple-400">turning {item.age_turning}</span>
+									{/if}
+									{#if item.category}
+										<span class="text-xs px-1.5 py-0.5 rounded {typeColor(item.type)}">{item.category}</span>
+									{/if}
+								</div>
+								<span class="text-sm {item.days_until === 0 ? 'text-green-400 font-bold' : item.days_until <= 3 ? 'text-yellow-400' : 'text-gray-400'}">{formatDaysUntil(item.days_until)}</span>
 							</div>
-							<span class="text-sm {b.days_until === 0 ? 'text-green-400 font-bold' : 'text-yellow-400'}">{formatDaysUntil(b.days_until)}</span>
-						</div>
+							{#if item.project_name}
+								<span class="text-xs text-gray-500">{item.project_name}</span>
+							{/if}
+						</a>
 					{/each}
 				</div>
 			{/if}
@@ -148,12 +202,17 @@
 		<div class="lg:col-span-2">
 			<h3 class="text-lg font-semibold mb-3">Projects</h3>
 			{#if projects.length === 0}
-				<p class="text-gray-500 text-sm">No projects yet. <a href="/projects/new" class="text-blue-400 hover:underline">Create one</a>.</p>
+				<p class="text-gray-500 text-sm">No projects yet. <a href="/projects" class="text-blue-400 hover:underline">Create one</a>.</p>
 			{:else}
 				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
 					{#each projects as p (p.id)}
 						<a href="/projects/{p.id}" class="block bg-gray-800 rounded-lg p-4 hover:bg-gray-750 border border-gray-700 hover:border-gray-600 transition-colors">
-							<h4 class="font-semibold">{p.name}</h4>
+							<div class="flex items-center gap-2">
+								{#if p.color}
+									<span class="w-3 h-3 rounded-full shrink-0" style="background: {p.color}"></span>
+								{/if}
+								<h4 class="font-semibold">{p.name}</h4>
+							</div>
 							{#if p.description}
 								<p class="text-sm text-gray-400 mt-1 line-clamp-2">{p.description}</p>
 							{/if}

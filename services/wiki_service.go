@@ -1,150 +1,148 @@
 package services
 
 import (
+	"database/sql"
 	"errors"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/joao-paulo-santos/waypoint-memory/models"
 )
 
 var (
-	ErrWikiNotFound   = errors.New("wiki page not found")
-	ErrDocsNotEnabled = errors.New("docs path not configured for this project")
-	ErrPathTraversal  = errors.New("invalid path: traversal not allowed")
+	ErrWikiNotFound  = errors.New("wiki page not found")
+	ErrPathTraversal = errors.New("invalid path: traversal not allowed")
 )
 
-type WikiService struct{}
-
-func NewWikiService() *WikiService {
-	return &WikiService{}
+type WikiService struct {
+	DB *sql.DB
 }
 
-func (s *WikiService) ListWikiPages(waypointDir string) ([]*models.FileNode, error) {
-	wikiDir := filepath.Join(waypointDir, "wiki")
-	return s.buildTree(wikiDir, "")
+func NewWikiService(db *sql.DB) *WikiService {
+	return &WikiService{DB: db}
 }
 
-func (s *WikiService) ReadWikiPage(waypointDir, slug string) (*models.WikiPage, error) {
-	wikiDir := filepath.Join(waypointDir, "wiki")
-	return s.readPage(wikiDir, slug)
-}
-
-func (s *WikiService) ListDocsPages(projectPath, docsPath string) ([]*models.FileNode, error) {
-	if docsPath == "" {
-		return nil, ErrDocsNotEnabled
-	}
-
-	fullDocsPath := filepath.Join(projectPath, docsPath)
-	if _, err := os.Stat(fullDocsPath); os.IsNotExist(err) {
-		return nil, ErrWikiNotFound
-	}
-
-	return s.buildTree(fullDocsPath, "")
-}
-
-func (s *WikiService) ReadDocsPage(projectPath, docsPath, slug string) (*models.WikiPage, error) {
-	if docsPath == "" {
-		return nil, ErrDocsNotEnabled
-	}
-
-	fullDocsPath := filepath.Join(projectPath, docsPath)
-	return s.readPage(fullDocsPath, slug)
-}
-
-func (s *WikiService) buildTree(rootDir, relativePath string) ([]*models.FileNode, error) {
-	dirPath := filepath.Join(rootDir, relativePath)
-
-	entries, err := os.ReadDir(dirPath)
+func (s *WikiService) ListWikiPages(projectID int64) ([]*models.FileNode, error) {
+	rows, err := s.DB.Query(
+		`SELECT path FROM wiki_pages WHERE project_id = $1 ORDER BY path`, projectID,
+	)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
+	defer rows.Close()
 
-	var nodes []*models.FileNode
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".") {
-			continue
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
 		}
-
-		childRelPath := entry.Name()
-		if relativePath != "" {
-			childRelPath = relativePath + "/" + entry.Name()
-		}
-
-		node := &models.FileNode{
-			Name:  entry.Name(),
-			Path:  childRelPath,
-			IsDir: entry.IsDir(),
-		}
-
-		if entry.IsDir() {
-			children, err := s.buildTree(rootDir, childRelPath)
-			if err != nil {
-				return nil, err
-			}
-			node.Children = children
-		}
-
-		nodes = append(nodes, node)
+		paths = append(paths, p)
 	}
 
-	sort.Slice(nodes, func(i, j int) bool {
-		if nodes[i].IsDir != nodes[j].IsDir {
-			return nodes[i].IsDir
-		}
-		return nodes[i].Name < nodes[j].Name
-	})
-
-	return nodes, nil
+	return buildTreeFromPaths(paths), nil
 }
 
-func (s *WikiService) readPage(rootDir, slug string) (*models.WikiPage, error) {
-	if err := validateSlug(slug); err != nil {
+func (s *WikiService) ReadWikiPage(projectID int64, pagePath string) (*models.WikiPage, error) {
+	if err := validateWikiPath(pagePath); err != nil {
 		return nil, err
 	}
 
-	filePath := filepath.Join(rootDir, slug)
-
-	absRoot, _ := filepath.Abs(rootDir)
-	absFile, _ := filepath.Abs(filePath)
-	if !strings.HasPrefix(absFile, absRoot) {
-		return nil, ErrPathTraversal
-	}
-
-	content, err := os.ReadFile(filePath)
-	if os.IsNotExist(err) {
+	var content string
+	var createdAt, updatedAt string
+	err := s.DB.QueryRow(
+		`SELECT content, created_at, updated_at FROM wiki_pages WHERE project_id = $1 AND path = $2`,
+		projectID, pagePath,
+	).Scan(&content, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
 		return nil, ErrWikiNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	title := strings.TrimSuffix(filepath.Base(slug), ".md")
+	title := strings.TrimSuffix(pagePath, ".md")
 	if title == "" {
-		title = slug
+		title = pagePath
+	}
+	if strings.Contains(title, "/") {
+		title = title[strings.LastIndex(title, "/")+1:]
 	}
 
 	return &models.WikiPage{
 		Title:   title,
-		Content: string(content),
-		Path:    slug,
+		Content: content,
+		Path:    pagePath,
 	}, nil
 }
 
-func validateSlug(slug string) error {
-	if slug == "" {
-		return errors.New("slug is required")
+func (s *WikiService) WriteWikiPage(projectID int64, pagePath, content string) error {
+	if err := validateWikiPath(pagePath); err != nil {
+		return err
 	}
-	if strings.Contains(slug, "..") {
-		return ErrPathTraversal
+
+	_, err := s.DB.Exec(
+		`INSERT INTO wiki_pages (project_id, path, content, updated_at)
+		 VALUES ($1, $2, $3, NOW())
+		 ON CONFLICT (project_id, path) DO UPDATE SET content = $3, updated_at = NOW()`,
+		projectID, pagePath, content,
+	)
+	return err
+}
+
+func (s *WikiService) DeleteWikiPage(projectID int64, pagePath string) error {
+	if err := validateWikiPath(pagePath); err != nil {
+		return err
 	}
-	if filepath.IsAbs(slug) {
+
+	result, err := s.DB.Exec(
+		"DELETE FROM wiki_pages WHERE project_id = $1 AND path = $2",
+		projectID, pagePath,
+	)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return ErrWikiNotFound
+	}
+	return nil
+}
+
+func validateWikiPath(pagePath string) error {
+	if pagePath == "" {
+		return errors.New("path is required")
+	}
+	if strings.Contains(pagePath, "..") {
 		return ErrPathTraversal
 	}
 	return nil
+}
+
+func buildTreeFromPaths(paths []string) []*models.FileNode {
+	root := &models.FileNode{Name: "wiki", IsDir: true}
+	for _, p := range paths {
+		parts := strings.Split(p, "/")
+		current := root
+		for i, part := range parts {
+			isFile := i == len(parts)-1
+			found := false
+			for _, child := range current.Children {
+				if child.Name == part {
+					current = child
+					found = true
+					break
+				}
+			}
+			if !found {
+				node := &models.FileNode{
+					Name:  part,
+					Path:  strings.Join(parts[:i+1], "/"),
+					IsDir: !isFile,
+				}
+				current.Children = append(current.Children, node)
+				current = node
+			}
+		}
+	}
+	return root.Children
 }

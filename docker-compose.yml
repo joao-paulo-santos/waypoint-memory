@@ -1,0 +1,17 @@
+services:
+  waypointmemory:
+    container_name: waypointmemory
+    build: .
+    networks:
+      proxy-net:
+        ipv4_address: 172.19.2.10
+    environment:
+      - WAYPOINT_SECRET=dev-secret
+      - WAYPOINT_DATABASE_URL=postgres://alice:securepassword123@postgres:5432/waypoint?sslmode=disable
+      - WAYPOINT_WEB_ADDR=:7666
+      - WAYPOINT_MCP_ADDR=:7667
+    restart: unless-stopped
+
+networks:
+  proxy-net:
+    external: true

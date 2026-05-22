@@ -12,12 +12,14 @@ import (
 )
 
 type LabelHandler struct {
+	DB         *sql.DB
 	ProjectSvc *services.ProjectService
 	LabelSvc   *services.LabelService
 }
 
-func NewLabelHandler(projectSvc *services.ProjectService, activitySvc *services.ActivityService) *LabelHandler {
+func NewLabelHandler(db *sql.DB, projectSvc *services.ProjectService, activitySvc *services.ActivityService) *LabelHandler {
 	return &LabelHandler{
+		DB:         db,
 		ProjectSvc: projectSvc,
 		LabelSvc:   &services.LabelService{Activity: activitySvc},
 	}
@@ -31,15 +33,19 @@ func (h *LabelHandler) Routes() chi.Router {
 	return r
 }
 
+func (h *LabelHandler) getProjectID(r *http.Request) (int64, error) {
+	projectIDStr := chi.URLParam(r, "projectId")
+	return strconv.ParseInt(projectIDStr, 10, 64)
+}
+
 func (h *LabelHandler) List(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
-	labels, err := h.LabelSvc.ListLabels(db)
+	labels, err := h.LabelSvc.ListLabels(h.DB, projectID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -50,12 +56,11 @@ func (h *LabelHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *LabelHandler) Create(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	var req models.CreateLabelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -63,7 +68,7 @@ func (h *LabelHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	label, err := h.LabelSvc.CreateLabel(db, req)
+	label, err := h.LabelSvc.CreateLabel(h.DB, projectID, req)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -75,12 +80,11 @@ func (h *LabelHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *LabelHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	lid, err := strconv.ParseInt(chi.URLParam(r, "lid"), 10, 64)
 	if err != nil {
@@ -88,23 +92,10 @@ func (h *LabelHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.LabelSvc.DeleteLabel(db, lid); err != nil {
+	if err := h.LabelSvc.DeleteLabel(h.DB, projectID, lid); err != nil {
 		writeError(w, err)
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *LabelHandler) getProjectDB(r *http.Request) (*sql.DB, func(), error) {
-	projectIDStr := chi.URLParam(r, "projectId")
-	projectID, err := strconv.ParseInt(projectIDStr, 10, 64)
-	if err != nil {
-		return nil, nil, err
-	}
-	db, err := h.ProjectSvc.GetProjectDB(projectID)
-	if err != nil {
-		return nil, nil, err
-	}
-	return db, func() { db.Close() }, nil
 }

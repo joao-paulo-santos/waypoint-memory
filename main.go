@@ -1,13 +1,10 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"os/exec"
-	"runtime"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/joao-paulo-santos/waypoint-memory/config"
@@ -19,7 +16,6 @@ import (
 
 var (
 	buildVersion = "dev"
-	centralDB    *sql.DB
 )
 
 func main() {
@@ -30,102 +26,95 @@ func main() {
 
 	cfg := config.Load()
 
-	if err := cfg.EnsureDataDir(); err != nil {
-		log.Fatalf("Failed to create data directory: %v", err)
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Config error: %v", err)
 	}
 
-	var err error
-	centralDB, err = db.InitCentralDB(cfg.CentralDBPath())
+	database, err := db.InitDB(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Failed to initialize central DB: %v", err)
+		log.Fatalf("Failed to initialize database: %v", err)
 	}
-	defer centralDB.Close()
+	defer database.Close()
 
-	authSvc := services.NewAuthService(centralDB)
+	authSvc := services.NewAuthService(database)
 	authHandler := handlers.NewAuthHandler(authSvc)
 
-	cfg.EnsureProjectsDir()
-	projectSvc := services.NewProjectService(centralDB, cfg.ProjectsDir())
+	projectSvc := services.NewProjectService(database)
 	activitySvc := services.NewActivityService()
-	birthdaySvc := services.NewBirthdayService(centralDB)
-	recurringSvc := services.NewRecurringEventService(centralDB)
-	calendarSvc := services.NewCalendarService(centralDB, projectSvc, birthdaySvc, recurringSvc)
+	contactSvc := services.NewContactService(database)
+	eventSvc := services.NewEventService(database)
+	calendarSvc := services.NewCalendarService(database, projectSvc, contactSvc, eventSvc)
+	wikiSvc := services.NewWikiService(database)
 
-	boardHandler := handlers.NewBoardHandler(projectSvc, activitySvc)
-	labelHandler := handlers.NewLabelHandler(projectSvc, activitySvc)
-	sprintHandler := handlers.NewSprintHandler(projectSvc)
+	boardHandler := handlers.NewBoardHandler(database, projectSvc, activitySvc)
+	labelHandler := handlers.NewLabelHandler(database, projectSvc, activitySvc)
+	sprintHandler := handlers.NewSprintHandler(database, projectSvc)
+	wikiHandler := handlers.NewWikiHandler(database, projectSvc, wikiSvc)
 
 	r := chi.NewRouter()
 
 	r.Post("/api/v1/auth/login", authHandler.Login)
 	r.Post("/api/v1/auth/logout", authHandler.Logout)
+	r.Post("/api/v1/auth/register", authHandler.Register)
 	r.Get("/api/v1/auth/status", authHandler.Status)
-	r.Post("/api/v1/auth/set-password", authHandler.SetPassword)
+	r.Get("/api/v1/auth/has-users", authHandler.HasUsers)
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(handlers.AuthMiddleware(authSvc))
 
 		r.Get("/v1/health", handleHealth)
 
-		projectHandler := handlers.NewProjectHandler(projectSvc)
+		projectHandler := handlers.NewProjectHandler(database, projectSvc)
 		r.Mount("/v1/projects", projectHandler.Routes())
 
 		r.Mount("/v1/projects/{projectId}/board", boardHandler.Routes())
 		r.Mount("/v1/projects/{projectId}/labels", labelHandler.Routes())
 		r.Mount("/v1/projects/{projectId}/sprints", sprintHandler.Routes())
 
-		activityHandler := handlers.NewActivityHandler(projectSvc, activitySvc)
+		activityHandler := handlers.NewActivityHandler(database, projectSvc, activitySvc)
 		r.Get("/v1/projects/{projectId}/activity", activityHandler.ProjectActivity)
 		r.Get("/v1/activity", activityHandler.GlobalActivity)
 
-		contactHandler := handlers.NewContactHandler(services.NewContactService(centralDB))
+		contactHandler := handlers.NewContactHandler(contactSvc)
 		r.Mount("/v1/contacts", contactHandler.Routes())
 
-		birthdayHandler := handlers.NewBirthdayHandler(birthdaySvc)
-		r.Mount("/v1/birthdays", birthdayHandler.Routes())
-
-		eventHandler := handlers.NewRecurringEventHandler(recurringSvc)
+		eventHandler := handlers.NewEventHandler(eventSvc)
 		r.Mount("/v1/events", eventHandler.Routes())
+
+		upcomingHandler := handlers.NewUpcomingHandler(database, projectSvc, contactSvc, eventSvc)
+		r.Get("/v1/upcoming", upcomingHandler.GetUpcoming)
 
 		calendarHandler := handlers.NewCalendarHandler(calendarSvc)
 		r.Get("/v1/calendar", calendarHandler.GetCalendar)
 		r.Get("/v1/calendar/today", calendarHandler.GetToday)
 
-		wikiHandler := handlers.NewWikiHandler(projectSvc)
 		r.Mount("/v1/projects/{projectId}/wiki", wikiHandler.Routes())
 
-		tokenHandler := handlers.NewTokenHandler(services.NewTokenService(centralDB))
+		tokenHandler := handlers.NewTokenHandler(services.NewTokenService(database))
 		r.Mount("/v1/tokens", tokenHandler.Routes())
 	})
 
-	if !cfg.Dev {
-		r.Handle("/*", frontendFileServer())
-	}
+	r.Handle("/*", frontendFileServer())
 
 	webAddr := config.ResolveAddr(cfg.WebAddr)
 
 	if !cfg.NoMCP {
-		mcpAddr := config.ResolveAddr(cfg.MCPAddr)
+		boardSvc := &services.BoardService{Activity: activitySvc}
+		labelSvc := &services.LabelService{Activity: activitySvc}
+		sprintSvc := &services.SprintService{}
 		mcpServer := mcp.NewMCPServer(
-			centralDB, projectSvc, boardHandler.BoardSvc, labelHandler.LabelSvc,
-			sprintHandler.SprintSvc, activitySvc,
-			services.NewContactService(centralDB), birthdaySvc,
-			calendarSvc, services.NewWikiService(), recurringSvc,
+			database, projectSvc, boardSvc, labelSvc, sprintSvc,
+			activitySvc, contactSvc, calendarSvc, wikiSvc, eventSvc,
 		)
 		go func() {
-			if err := mcpServer.Start(mcpAddr); err != nil {
-				log.Fatalf("MCP server failed: %v", err)
+			if err := mcpServer.Start(cfg.MCPAddr); err != nil {
+				log.Printf("MCP server error: %v", err)
 			}
 		}()
-		fmt.Printf("MCP server on http://localhost%s\n", mcpAddr)
 	}
 
 	fmt.Printf("Waypoint Memory %s\n", buildVersion)
 	fmt.Printf("Open http://localhost%s\n", webAddr)
-
-	if cfg.Open {
-		openBrowser("http://localhost" + webAddr)
-	}
 
 	log.Printf("Starting server on %s", webAddr)
 	if err := http.ListenAndServe(webAddr, r); err != nil {
@@ -138,17 +127,4 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "ok",
 	})
-}
-
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	_ = cmd.Start()
 }

@@ -8,3 +8,4 @@ executionplan.md
 phases/
 .fuse_hidden*
 frontend/build/
+.env

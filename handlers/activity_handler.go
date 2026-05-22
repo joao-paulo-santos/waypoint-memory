@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -10,12 +11,14 @@ import (
 )
 
 type ActivityHandler struct {
+	DB          *sql.DB
 	ProjectSvc  *services.ProjectService
 	ActivitySvc *services.ActivityService
 }
 
-func NewActivityHandler(projectSvc *services.ProjectService, activitySvc *services.ActivityService) *ActivityHandler {
+func NewActivityHandler(db *sql.DB, projectSvc *services.ProjectService, activitySvc *services.ActivityService) *ActivityHandler {
 	return &ActivityHandler{
+		DB:          db,
 		ProjectSvc:  projectSvc,
 		ActivitySvc: activitySvc,
 	}
@@ -29,13 +32,6 @@ func (h *ActivityHandler) ProjectActivity(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	projDB, err := h.ProjectSvc.GetProjectDB(projectID)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	defer projDB.Close()
-
 	limit := 50
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil {
@@ -43,7 +39,7 @@ func (h *ActivityHandler) ProjectActivity(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	entries, err := h.ActivitySvc.GetProjectActivity(projDB, limit)
+	entries, err := h.ActivitySvc.GetProjectActivity(h.DB, projectID, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -61,7 +57,7 @@ func (h *ActivityHandler) GlobalActivity(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	entries, err := h.ActivitySvc.GetGlobalActivity(h.ProjectSvc.CentralDB, h.ProjectSvc, limit)
+	entries, err := h.ActivitySvc.GetGlobalActivity(h.DB, h.ProjectSvc, getUserID(r), limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

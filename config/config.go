@@ -1,39 +1,31 @@
 package config
 
 import (
-	"flag"
+	"fmt"
 	"net"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 )
 
 type Config struct {
-	WebAddr string
-	MCPAddr string
-	DataDir string
-	Dev     bool
-	NoMCP   bool
-	Open    bool
+	WebAddr     string
+	MCPAddr     string
+	DatabaseURL string
+	NoMCP       bool
+	Secret      string
+	DataDir     string
 }
 
 func Load() *Config {
 	cfg := &Config{}
 
-	flag.StringVar(&cfg.WebAddr, "webAddr", ":3666", "Web UI + REST API address")
-	flag.StringVar(&cfg.MCPAddr, "mcpAddr", ":3667", "MCP SSE server address")
-	flag.BoolVar(&cfg.Dev, "dev", false, "Enable dev mode")
-	flag.BoolVar(&cfg.NoMCP, "noMcp", false, "Disable MCP server")
-
-	defaultOpen := runtime.GOOS == "windows"
-	flag.BoolVar(&cfg.Open, "open", defaultOpen, "Open browser on start")
-
-	defaultDataDir := defaultDataDir()
-	flag.StringVar(&cfg.DataDir, "dataDir", defaultDataDir, "Central database directory")
-
-	flag.Parse()
+	cfg.WebAddr = envOr("WAYPOINT_WEB_ADDR", ":7666")
+	cfg.MCPAddr = envOr("WAYPOINT_MCP_ADDR", ":7667")
+	cfg.DatabaseURL = envOr("WAYPOINT_DATABASE_URL", "")
+	cfg.NoMCP = envBool("WAYPOINT_NO_MCP")
+	cfg.Secret = envOr("WAYPOINT_SECRET", "")
+	cfg.DataDir = envOr("WAYPOINT_DATA_DIR", "/data")
 
 	return cfg
 }
@@ -47,28 +39,21 @@ func HandleVersion() bool {
 	return false
 }
 
-func defaultDataDir() string {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		configDir = "."
+func (c *Config) Validate() error {
+	if c.Secret == "" {
+		return fmt.Errorf("WAYPOINT_SECRET is required")
 	}
-	return filepath.Join(configDir, "Waypoint")
-}
-
-func (c *Config) CentralDBPath() string {
-	return filepath.Join(c.DataDir, "waypoint.db")
-}
-
-func (c *Config) ProjectsDir() string {
-	return filepath.Join(c.DataDir, "projects")
+	if c.DatabaseURL == "" {
+		return fmt.Errorf("WAYPOINT_DATABASE_URL is required")
+	}
+	return nil
 }
 
 func (c *Config) EnsureDataDir() error {
+	if c.DataDir == "" {
+		return nil
+	}
 	return os.MkdirAll(c.DataDir, 0755)
-}
-
-func (c *Config) EnsureProjectsDir() error {
-	return os.MkdirAll(c.ProjectsDir(), 0755)
 }
 
 func ResolveAddr(addr string) string {
@@ -99,4 +84,16 @@ func AddrPort(addr string) string {
 		return ""
 	}
 	return port
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func envBool(key string) bool {
+	v := os.Getenv(key)
+	return strings.EqualFold(v, "true") || strings.EqualFold(v, "1") || strings.EqualFold(v, "yes")
 }

@@ -12,13 +12,15 @@ import (
 )
 
 type BoardHandler struct {
-	ProjectSvc  *services.ProjectService
-	BoardSvc    *services.BoardService
-	CommentSvc  *services.CommentService
+	DB         *sql.DB
+	ProjectSvc *services.ProjectService
+	BoardSvc   *services.BoardService
+	CommentSvc *services.CommentService
 }
 
-func NewBoardHandler(projectSvc *services.ProjectService, activitySvc *services.ActivityService) *BoardHandler {
+func NewBoardHandler(db *sql.DB, projectSvc *services.ProjectService, activitySvc *services.ActivityService) *BoardHandler {
 	return &BoardHandler{
+		DB:         db,
 		ProjectSvc: projectSvc,
 		BoardSvc:   &services.BoardService{Activity: activitySvc},
 		CommentSvc: &services.CommentService{Activity: activitySvc},
@@ -47,30 +49,19 @@ func (h *BoardHandler) Routes() chi.Router {
 	return r
 }
 
-func (h *BoardHandler) getProjectDB(r *http.Request) (*sql.DB, func(), error) {
+func (h *BoardHandler) getProjectID(r *http.Request) (int64, error) {
 	projectIDStr := chi.URLParam(r, "projectId")
-	projectID, err := strconv.ParseInt(projectIDStr, 10, 64)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	db, err := h.ProjectSvc.GetProjectDB(projectID)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return db, func() { db.Close() }, nil
+	return strconv.ParseInt(projectIDStr, 10, 64)
 }
 
 func (h *BoardHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
-	board, err := h.BoardSvc.GetBoard(db)
+	board, err := h.BoardSvc.GetBoard(h.DB, projectID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -81,12 +72,11 @@ func (h *BoardHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) CreateBucket(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	var req models.CreateBucketRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -94,7 +84,7 @@ func (h *BoardHandler) CreateBucket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bucket, err := h.BoardSvc.CreateBucket(db, req)
+	bucket, err := h.BoardSvc.CreateBucket(h.DB, projectID, req)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -106,12 +96,11 @@ func (h *BoardHandler) CreateBucket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) UpdateBucket(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	bid, err := strconv.ParseInt(chi.URLParam(r, "bid"), 10, 64)
 	if err != nil {
@@ -125,7 +114,7 @@ func (h *BoardHandler) UpdateBucket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bucket, err := h.BoardSvc.UpdateBucket(db, bid, req)
+	bucket, err := h.BoardSvc.UpdateBucket(h.DB, projectID, bid, req)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -136,12 +125,11 @@ func (h *BoardHandler) UpdateBucket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) DeleteBucket(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	bid, err := strconv.ParseInt(chi.URLParam(r, "bid"), 10, 64)
 	if err != nil {
@@ -149,7 +137,7 @@ func (h *BoardHandler) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.BoardSvc.DeleteBucket(db, bid); err != nil {
+	if err := h.BoardSvc.DeleteBucket(h.DB, projectID, bid); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -158,12 +146,11 @@ func (h *BoardHandler) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) ReorderBuckets(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	var req models.ReorderBucketsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -171,7 +158,7 @@ func (h *BoardHandler) ReorderBuckets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.BoardSvc.ReorderBuckets(db, req); err != nil {
+	if err := h.BoardSvc.ReorderBuckets(h.DB, projectID, req); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -180,12 +167,11 @@ func (h *BoardHandler) ReorderBuckets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	var req models.CreateTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -193,7 +179,7 @@ func (h *BoardHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.BoardSvc.CreateTask(db, req)
+	task, err := h.BoardSvc.CreateTask(h.DB, projectID, req)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -205,20 +191,13 @@ func (h *BoardHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) GetTask(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	defer close()
-
 	tid, err := strconv.ParseInt(chi.URLParam(r, "tid"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid task id", http.StatusBadRequest)
 		return
 	}
 
-	task, err := h.BoardSvc.GetTask(db, tid)
+	task, err := h.BoardSvc.GetTask(h.DB, tid)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -229,12 +208,11 @@ func (h *BoardHandler) GetTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	tid, err := strconv.ParseInt(chi.URLParam(r, "tid"), 10, 64)
 	if err != nil {
@@ -248,7 +226,7 @@ func (h *BoardHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.BoardSvc.UpdateTask(db, tid, req)
+	task, err := h.BoardSvc.UpdateTask(h.DB, projectID, tid, req)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -259,12 +237,11 @@ func (h *BoardHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	tid, err := strconv.ParseInt(chi.URLParam(r, "tid"), 10, 64)
 	if err != nil {
@@ -272,7 +249,7 @@ func (h *BoardHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.BoardSvc.DeleteTask(db, tid); err != nil {
+	if err := h.BoardSvc.DeleteTask(h.DB, projectID, tid); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -281,12 +258,11 @@ func (h *BoardHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) MoveTask(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	tid, err := strconv.ParseInt(chi.URLParam(r, "tid"), 10, 64)
 	if err != nil {
@@ -300,7 +276,7 @@ func (h *BoardHandler) MoveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.BoardSvc.MoveTask(db, tid, req.BucketID)
+	task, err := h.BoardSvc.MoveTask(h.DB, projectID, tid, req.BucketID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -311,12 +287,11 @@ func (h *BoardHandler) MoveTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) ReorderTasks(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	var req models.ReorderTasksRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -324,7 +299,7 @@ func (h *BoardHandler) ReorderTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.BoardSvc.ReorderTasks(db, req); err != nil {
+	if err := h.BoardSvc.ReorderTasks(h.DB, projectID, req); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -333,12 +308,11 @@ func (h *BoardHandler) ReorderTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) AddComment(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
+	projectID, err := h.getProjectID(r)
 	if err != nil {
-		writeError(w, err)
+		http.Error(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
-	defer close()
 
 	tid, err := strconv.ParseInt(chi.URLParam(r, "tid"), 10, 64)
 	if err != nil {
@@ -352,8 +326,7 @@ func (h *BoardHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commentSvc := h.CommentSvc
-	comment, err := commentSvc.AddComment(db, tid, req)
+	comment, err := h.CommentSvc.AddComment(h.DB, projectID, tid, req)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -365,21 +338,13 @@ func (h *BoardHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BoardHandler) ListComments(w http.ResponseWriter, r *http.Request) {
-	db, close, err := h.getProjectDB(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	defer close()
-
 	tid, err := strconv.ParseInt(chi.URLParam(r, "tid"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid task id", http.StatusBadRequest)
 		return
 	}
 
-	commentSvc := h.CommentSvc
-	comments, err := commentSvc.ListComments(db, tid)
+	comments, err := h.CommentSvc.ListComments(h.DB, tid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

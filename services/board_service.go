@@ -23,8 +23,8 @@ type BoardService struct {
 	Activity *ActivityService
 }
 
-func (s *BoardService) GetBoard(db *sql.DB) (*models.Board, error) {
-	buckets, err := s.ListBuckets(db)
+func (s *BoardService) GetBoard(db *sql.DB, projectID int64) (*models.Board, error) {
+	buckets, err := s.ListBuckets(db, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -41,10 +41,10 @@ func (s *BoardService) GetBoard(db *sql.DB) (*models.Board, error) {
 	return &models.Board{Buckets: result}, nil
 }
 
-func (s *BoardService) ListBuckets(db *sql.DB) ([]models.Bucket, error) {
+func (s *BoardService) ListBuckets(db *sql.DB, projectID int64) ([]models.Bucket, error) {
 	rows, err := db.Query(
 		`SELECT id, title, position, is_done_bucket, wip_limit, created_at, updated_at
-		 FROM buckets ORDER BY position`,
+		 FROM buckets WHERE project_id = $1 ORDER BY position`, projectID,
 	)
 	if err != nil {
 		return nil, err
@@ -54,24 +54,22 @@ func (s *BoardService) ListBuckets(db *sql.DB) ([]models.Bucket, error) {
 	var buckets []models.Bucket
 	for rows.Next() {
 		var b models.Bucket
-		var isDone int
-		if err := rows.Scan(&b.ID, &b.Title, &b.Position, &isDone, &b.WIPLimit, &b.CreatedAt, &b.UpdatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.Title, &b.Position, &b.IsDoneBucket, &b.WIPLimit, &b.CreatedAt, &b.UpdatedAt); err != nil {
 			return nil, err
 		}
-		b.IsDoneBucket = isDone == 1
 		buckets = append(buckets, b)
 	}
 	return buckets, nil
 }
 
-func (s *BoardService) CreateBucket(db *sql.DB, req models.CreateBucketRequest) (*models.Bucket, error) {
+func (s *BoardService) CreateBucket(db *sql.DB, projectID int64, req models.CreateBucketRequest) (*models.Bucket, error) {
 	if req.Title == "" {
 		return nil, errors.New("title is required")
 	}
 
 	if req.Position == 0 {
 		var maxPos sql.NullFloat64
-		_ = db.QueryRow("SELECT MAX(position) FROM buckets").Scan(&maxPos)
+		_ = db.QueryRow("SELECT MAX(position) FROM buckets WHERE project_id = $1", projectID).Scan(&maxPos)
 		if maxPos.Valid {
 			req.Position = maxPos.Float64 + 100
 		} else {
@@ -80,24 +78,24 @@ func (s *BoardService) CreateBucket(db *sql.DB, req models.CreateBucketRequest) 
 	}
 
 	if req.IsDoneBucket {
-		if err := s.clearDoneBucket(db); err != nil {
+		if err := s.clearDoneBucket(db, projectID); err != nil {
 			return nil, err
 		}
 	}
 
-	result, err := db.Exec(
-		`INSERT INTO buckets (title, position, is_done_bucket, wip_limit)
-		 VALUES (?, ?, ?, ?)`,
-		req.Title, req.Position, req.IsDoneBucket, req.WIPLimit,
-	)
+	var id int64
+	err := db.QueryRow(
+		`INSERT INTO buckets (project_id, title, position, is_done_bucket, wip_limit)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING id`,
+		projectID, req.Title, req.Position, req.IsDoneBucket, req.WIPLimit,
+	).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
 
-	id, _ := result.LastInsertId()
-
 	if s.Activity != nil {
-		s.Activity.LogActivity(db, LogActivityParams{
+		s.Activity.LogActivity(db, projectID, LogActivityParams{
 			Action:     "bucket_created",
 			EntityType: "bucket",
 			EntityID:   id,
@@ -110,53 +108,54 @@ func (s *BoardService) CreateBucket(db *sql.DB, req models.CreateBucketRequest) 
 
 func (s *BoardService) GetBucket(db *sql.DB, id int64) (*models.Bucket, error) {
 	b := &models.Bucket{}
-	var isDone int
 	err := db.QueryRow(
 		`SELECT id, title, position, is_done_bucket, wip_limit, created_at, updated_at
-		 FROM buckets WHERE id = ?`, id,
-	).Scan(&b.ID, &b.Title, &b.Position, &isDone, &b.WIPLimit, &b.CreatedAt, &b.UpdatedAt)
+		 FROM buckets WHERE id = $1`, id,
+	).Scan(&b.ID, &b.Title, &b.Position, &b.IsDoneBucket, &b.WIPLimit, &b.CreatedAt, &b.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrBucketNotFound
 	}
-	b.IsDoneBucket = isDone == 1
 	return b, err
 }
 
-func (s *BoardService) UpdateBucket(db *sql.DB, id int64, req models.UpdateBucketRequest) (*models.Bucket, error) {
+func (s *BoardService) UpdateBucket(db *sql.DB, projectID, id int64, req models.UpdateBucketRequest) (*models.Bucket, error) {
 	if _, err := s.GetBucket(db, id); err != nil {
 		return nil, err
 	}
 
-	sets := []string{"updated_at = datetime('now')"}
-	args := []any{}
+	sets := []string{"updated_at = NOW()"}
+	args := []any{id}
+	paramIdx := 2
 
 	if req.Title != nil {
-		sets = append(sets, "title = ?")
+		sets = append(sets, fmt.Sprintf("title = $%d", paramIdx))
 		args = append(args, *req.Title)
+		paramIdx++
 	}
 	if req.Position != nil {
-		sets = append(sets, "position = ?")
+		sets = append(sets, fmt.Sprintf("position = $%d", paramIdx))
 		args = append(args, *req.Position)
+		paramIdx++
 	}
 	if req.IsDoneBucket != nil && *req.IsDoneBucket {
-		if err := s.clearDoneBucket(db); err != nil {
+		if err := s.clearDoneBucket(db, projectID); err != nil {
 			return nil, err
 		}
-		sets = append(sets, "is_done_bucket = 1")
+		sets = append(sets, "is_done_bucket = TRUE")
 	}
 	if req.WIPLimit != nil {
-		sets = append(sets, "wip_limit = ?")
+		sets = append(sets, fmt.Sprintf("wip_limit = $%d", paramIdx))
 		args = append(args, *req.WIPLimit)
+		paramIdx++
 	}
 
-	args = append(args, id)
-	query := "UPDATE buckets SET " + strings.Join(sets, ", ") + " WHERE id = ?"
+	query := "UPDATE buckets SET " + strings.Join(sets, ", ") + " WHERE id = $1"
 	if _, err := db.Exec(query, args...); err != nil {
 		return nil, err
 	}
 
 	if s.Activity != nil {
-		s.Activity.LogActivity(db, LogActivityParams{
+		s.Activity.LogActivity(db, projectID, LogActivityParams{
 			Action:     "bucket_updated",
 			EntityType: "bucket",
 			EntityID:   id,
@@ -166,14 +165,14 @@ func (s *BoardService) UpdateBucket(db *sql.DB, id int64, req models.UpdateBucke
 	return s.GetBucket(db, id)
 }
 
-func (s *BoardService) DeleteBucket(db *sql.DB, id int64) error {
+func (s *BoardService) DeleteBucket(db *sql.DB, projectID, id int64) error {
 	bucket, err := s.GetBucket(db, id)
 	if err != nil {
 		return err
 	}
 
 	var taskCount int
-	if err := db.QueryRow("SELECT count(*) FROM tasks WHERE bucket_id = ?", id).Scan(&taskCount); err != nil {
+	if err := db.QueryRow("SELECT count(*) FROM tasks WHERE bucket_id = $1 AND sprint_id IS NULL", id).Scan(&taskCount); err != nil {
 		return err
 	}
 	if taskCount > 0 {
@@ -182,7 +181,7 @@ func (s *BoardService) DeleteBucket(db *sql.DB, id int64) error {
 
 	if bucket.IsDoneBucket {
 		var doneCount int
-		if err := db.QueryRow("SELECT count(*) FROM buckets WHERE is_done_bucket = 1").Scan(&doneCount); err != nil {
+		if err := db.QueryRow("SELECT count(*) FROM buckets WHERE project_id = $1 AND is_done_bucket = TRUE", projectID).Scan(&doneCount); err != nil {
 			return err
 		}
 		if doneCount <= 1 {
@@ -190,13 +189,13 @@ func (s *BoardService) DeleteBucket(db *sql.DB, id int64) error {
 		}
 	}
 
-	_, err = db.Exec("DELETE FROM buckets WHERE id = ?", id)
+	_, err = db.Exec("DELETE FROM buckets WHERE id = $1", id)
 	if err != nil {
 		return err
 	}
 
 	if s.Activity != nil {
-		s.Activity.LogActivity(db, LogActivityParams{
+		s.Activity.LogActivity(db, projectID, LogActivityParams{
 			Action:     "bucket_deleted",
 			EntityType: "bucket",
 			EntityID:   id,
@@ -206,7 +205,7 @@ func (s *BoardService) DeleteBucket(db *sql.DB, id int64) error {
 	return nil
 }
 
-func (s *BoardService) ReorderBuckets(db *sql.DB, req models.ReorderBucketsRequest) error {
+func (s *BoardService) ReorderBuckets(db *sql.DB, projectID int64, req models.ReorderBucketsRequest) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -215,7 +214,7 @@ func (s *BoardService) ReorderBuckets(db *sql.DB, req models.ReorderBucketsReque
 
 	for i, id := range req.BucketIDs {
 		pos := float64((i + 1) * 100)
-		if _, err := tx.Exec("UPDATE buckets SET position = ?, updated_at = datetime('now') WHERE id = ?", pos, id); err != nil {
+		if _, err := tx.Exec("UPDATE buckets SET position = $1, updated_at = NOW() WHERE id = $2 AND project_id = $3", pos, id, projectID); err != nil {
 			return err
 		}
 	}
@@ -223,65 +222,65 @@ func (s *BoardService) ReorderBuckets(db *sql.DB, req models.ReorderBucketsReque
 	return tx.Commit()
 }
 
-func (s *BoardService) clearDoneBucket(db *sql.DB) error {
-	_, err := db.Exec("UPDATE buckets SET is_done_bucket = 0 WHERE is_done_bucket = 1")
+func (s *BoardService) clearDoneBucket(db *sql.DB, projectID int64) error {
+	_, err := db.Exec("UPDATE buckets SET is_done_bucket = FALSE WHERE project_id = $1 AND is_done_bucket = TRUE", projectID)
 	return err
 }
 
-func (s *BoardService) GetDoneBucketID(db *sql.DB) (int64, error) {
+func (s *BoardService) GetDoneBucketID(db *sql.DB, projectID int64) (int64, error) {
 	var id int64
-	err := db.QueryRow("SELECT id FROM buckets WHERE is_done_bucket = 1 LIMIT 1").Scan(&id)
+	err := db.QueryRow("SELECT id FROM buckets WHERE project_id = $1 AND is_done_bucket = TRUE LIMIT 1", projectID).Scan(&id)
 	if err == sql.ErrNoRows {
 		return 0, ErrNoDoneBucket
 	}
 	return id, err
 }
 
-func (s *BoardService) CreateTask(db *sql.DB, req models.CreateTaskRequest) (*models.Task, error) {
+func (s *BoardService) CreateTask(db *sql.DB, projectID int64, req models.CreateTaskRequest) (*models.Task, error) {
 	if req.Title == "" {
 		return nil, errors.New("title is required")
 	}
 
 	var position float64
 	var maxPos sql.NullFloat64
-	_ = db.QueryRow("SELECT MAX(position) FROM tasks WHERE bucket_id = ?", req.BucketID).Scan(&maxPos)
+	_ = db.QueryRow("SELECT MAX(position) FROM tasks WHERE bucket_id = $1 AND project_id = $2 AND sprint_id IS NULL", req.BucketID, projectID).Scan(&maxPos)
 	if maxPos.Valid {
 		position = maxPos.Float64 + 1
 	} else {
 		position = 1
 	}
 
-	var isDone int
-	err := db.QueryRow("SELECT is_done_bucket FROM buckets WHERE id = ?", req.BucketID).Scan(&isDone)
+	var isDone bool
+	err := db.QueryRow("SELECT is_done_bucket FROM buckets WHERE id = $1 AND project_id = $2", req.BucketID, projectID).Scan(&isDone)
 	if err != nil {
 		return nil, ErrBucketNotFound
 	}
 
-	var done int
+	var done bool
 	var doneAt any
-	if isDone == 1 {
-		done = 1
-		doneAt = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	if isDone {
+		done = true
+		doneAt = time.Now().UTC()
 	}
 
-	result, err := db.Exec(
-		`INSERT INTO tasks (bucket_id, title, description, position, priority, due_date, done, done_at, created_by)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.BucketID, req.Title, req.Description, position, req.Priority,
+	var id int64
+	err = db.QueryRow(
+		`INSERT INTO tasks (project_id, bucket_id, title, description, position, priority, due_date, done, done_at, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		 RETURNING id`,
+		projectID, req.BucketID, req.Title, req.Description, position, req.Priority,
 		req.DueDate, done, doneAt, req.CreatedBy,
-	)
+	).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
-
-	id, _ := result.LastInsertId()
 
 	if req.Labels != "" {
 		s.setTaskLabels(db, id, req.Labels)
 	}
 
 	if s.Activity != nil {
-		s.Activity.LogActivity(db, LogActivityParams{
+		s.Activity.LogActivity(db, projectID, LogActivityParams{
 			Action:     "task_created",
 			EntityType: "task",
 			EntityID:   id,
@@ -295,17 +294,15 @@ func (s *BoardService) CreateTask(db *sql.DB, req models.CreateTaskRequest) (*mo
 
 func (s *BoardService) GetTask(db *sql.DB, id int64) (*models.Task, error) {
 	t := &models.Task{}
-	var done int
 	err := db.QueryRow(
-		`SELECT id, bucket_id, title, description, position, priority, due_date,
+		`SELECT id, project_id, bucket_id, sprint_id, title, description, position, priority, due_date,
 		        done, done_at, created_by, created_at, updated_at
-		 FROM tasks WHERE id = ?`, id,
-	).Scan(&t.ID, &t.BucketID, &t.Title, &t.Description, &t.Position, &t.Priority,
-		&t.DueDate, &done, &t.DoneAt, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt)
+		 FROM tasks WHERE id = $1`, id,
+	).Scan(&t.ID, &t.ProjectID, &t.BucketID, &t.SprintID, &t.Title, &t.Description, &t.Position, &t.Priority,
+		&t.DueDate, &t.Done, &t.DoneAt, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrTaskNotFound
 	}
-	t.Done = done == 1
 
 	labels, err := (&LabelService{}).GetTaskLabels(db, t.ID)
 	if err != nil {
@@ -317,63 +314,70 @@ func (s *BoardService) GetTask(db *sql.DB, id int64) (*models.Task, error) {
 	return t, err
 }
 
-func (s *BoardService) UpdateTask(db *sql.DB, id int64, req models.UpdateTaskRequest) (*models.Task, error) {
+func (s *BoardService) UpdateTask(db *sql.DB, projectID, id int64, req models.UpdateTaskRequest) (*models.Task, error) {
 	existing, err := s.GetTask(db, id)
 	if err != nil {
 		return nil, err
 	}
 
-	sets := []string{"updated_at = datetime('now')"}
+	sets := []string{"updated_at = NOW()"}
 	args := []any{}
+	paramIdx := 1
 
 	if req.Title != nil {
-		sets = append(sets, "title = ?")
+		sets = append(sets, fmt.Sprintf("title = $%d", paramIdx))
 		args = append(args, *req.Title)
+		paramIdx++
 	}
 	if req.Description != nil {
-		sets = append(sets, "description = ?")
+		sets = append(sets, fmt.Sprintf("description = $%d", paramIdx))
 		args = append(args, *req.Description)
+		paramIdx++
 	}
 	if req.Priority != nil {
-		sets = append(sets, "priority = ?")
+		sets = append(sets, fmt.Sprintf("priority = $%d", paramIdx))
 		args = append(args, *req.Priority)
+		paramIdx++
 	}
 	if req.DueDate != nil {
-		sets = append(sets, "due_date = ?")
+		sets = append(sets, fmt.Sprintf("due_date = $%d", paramIdx))
 		args = append(args, *req.DueDate)
+		paramIdx++
 	}
 	if req.BucketID != nil {
-		sets = append(sets, "bucket_id = ?")
+		sets = append(sets, fmt.Sprintf("bucket_id = $%d", paramIdx))
 		args = append(args, *req.BucketID)
+		paramIdx++
 	}
 
 	if req.Done != nil {
 		if *req.Done && !existing.Done {
-			doneBucketID, err := s.GetDoneBucketID(db)
+			doneBucketID, err := s.GetDoneBucketID(db, projectID)
 			if err != nil {
 				return nil, err
 			}
-			sets = append(sets, "done = 1", "done_at = datetime('now')", "bucket_id = ?")
+			sets = append(sets, "done = TRUE", "done_at = NOW()", fmt.Sprintf("bucket_id = $%d", paramIdx))
 			args = append(args, doneBucketID)
+			paramIdx++
 		} else if !*req.Done && existing.Done {
-			sets = append(sets, "done = 0", "done_at = NULL")
+			sets = append(sets, "done = FALSE", "done_at = NULL")
 		}
 	} else if req.BucketID != nil && !existing.Done {
-		var isDone int
-		err := db.QueryRow("SELECT is_done_bucket FROM buckets WHERE id = ?", *req.BucketID).Scan(&isDone)
-		if err == nil && isDone == 1 {
-			sets = append(sets, "done = 1", "done_at = datetime('now')")
+		var isDone bool
+		err := db.QueryRow("SELECT is_done_bucket FROM buckets WHERE id = $1", *req.BucketID).Scan(&isDone)
+		if err == nil && isDone {
+			sets = append(sets, "done = TRUE", "done_at = NOW()")
 		}
 	} else if req.BucketID != nil && existing.Done {
-		var isDone int
-		err := db.QueryRow("SELECT is_done_bucket FROM buckets WHERE id = ?", *req.BucketID).Scan(&isDone)
-		if err == nil && isDone == 0 {
-			sets = append(sets, "done = 0", "done_at = NULL")
+		var isDone bool
+		err := db.QueryRow("SELECT is_done_bucket FROM buckets WHERE id = $1", *req.BucketID).Scan(&isDone)
+		if err == nil && !isDone {
+			sets = append(sets, "done = FALSE", "done_at = NULL")
 		}
 	}
 
 	args = append(args, id)
-	query := "UPDATE tasks SET " + strings.Join(sets, ", ") + " WHERE id = ?"
+	query := "UPDATE tasks SET " + strings.Join(sets, ", ") + fmt.Sprintf(" WHERE id = $%d", paramIdx)
 	if _, err := db.Exec(query, args...); err != nil {
 		return nil, err
 	}
@@ -393,7 +397,7 @@ func (s *BoardService) UpdateTask(db *sql.DB, id int64, req models.UpdateTaskReq
 			details["from_bucket"] = existing.BucketID
 			details["to_bucket"] = *req.BucketID
 		}
-		s.Activity.LogActivity(db, LogActivityParams{
+		s.Activity.LogActivity(db, projectID, LogActivityParams{
 			Action:     action,
 			EntityType: "task",
 			EntityID:   id,
@@ -404,13 +408,13 @@ func (s *BoardService) UpdateTask(db *sql.DB, id int64, req models.UpdateTaskReq
 	return s.GetTask(db, id)
 }
 
-func (s *BoardService) MoveTask(db *sql.DB, taskID, targetBucketID int64) (*models.Task, error) {
+func (s *BoardService) MoveTask(db *sql.DB, projectID, taskID, targetBucketID int64) (*models.Task, error) {
 	req := models.UpdateTaskRequest{BucketID: &targetBucketID}
-	return s.UpdateTask(db, taskID, req)
+	return s.UpdateTask(db, projectID, taskID, req)
 }
 
-func (s *BoardService) DeleteTask(db *sql.DB, id int64) error {
-	result, err := db.Exec("DELETE FROM tasks WHERE id = ?", id)
+func (s *BoardService) DeleteTask(db *sql.DB, projectID, id int64) error {
+	result, err := db.Exec("DELETE FROM tasks WHERE id = $1", id)
 	if err != nil {
 		return err
 	}
@@ -420,7 +424,7 @@ func (s *BoardService) DeleteTask(db *sql.DB, id int64) error {
 	}
 
 	if s.Activity != nil {
-		s.Activity.LogActivity(db, LogActivityParams{
+		s.Activity.LogActivity(db, projectID, LogActivityParams{
 			Action:     "task_deleted",
 			EntityType: "task",
 			EntityID:   id,
@@ -430,7 +434,7 @@ func (s *BoardService) DeleteTask(db *sql.DB, id int64) error {
 	return nil
 }
 
-func (s *BoardService) ReorderTasks(db *sql.DB, req models.ReorderTasksRequest) error {
+func (s *BoardService) ReorderTasks(db *sql.DB, projectID int64, req models.ReorderTasksRequest) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -439,7 +443,7 @@ func (s *BoardService) ReorderTasks(db *sql.DB, req models.ReorderTasksRequest) 
 
 	for i, id := range req.TaskIDs {
 		pos := float64(i + 1)
-		if _, err := tx.Exec("UPDATE tasks SET position = ?, updated_at = datetime('now') WHERE id = ?", pos, id); err != nil {
+		if _, err := tx.Exec("UPDATE tasks SET position = $1, updated_at = NOW() WHERE id = $2 AND project_id = $3", pos, id, projectID); err != nil {
 			return err
 		}
 	}
@@ -449,9 +453,9 @@ func (s *BoardService) ReorderTasks(db *sql.DB, req models.ReorderTasksRequest) 
 
 func (s *BoardService) listTasksByBucket(db *sql.DB, bucketID int64) ([]models.Task, error) {
 	rows, err := db.Query(
-		`SELECT id, bucket_id, title, description, position, priority, due_date,
+		`SELECT id, project_id, bucket_id, sprint_id, title, description, position, priority, due_date,
 		        done, done_at, created_by, created_at, updated_at
-		 FROM tasks WHERE bucket_id = ? ORDER BY position`, bucketID,
+		 FROM tasks WHERE bucket_id = $1 AND sprint_id IS NULL ORDER BY position`, bucketID,
 	)
 	if err != nil {
 		return nil, err
@@ -462,12 +466,10 @@ func (s *BoardService) listTasksByBucket(db *sql.DB, bucketID int64) ([]models.T
 	var tasks []models.Task
 	for rows.Next() {
 		var t models.Task
-		var done int
-		if err := rows.Scan(&t.ID, &t.BucketID, &t.Title, &t.Description, &t.Position,
-			&t.Priority, &t.DueDate, &done, &t.DoneAt, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.ProjectID, &t.BucketID, &t.SprintID, &t.Title, &t.Description, &t.Position,
+			&t.Priority, &t.DueDate, &t.Done, &t.DoneAt, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
-		t.Done = done == 1
 
 		labels, err := labelSvc.GetTaskLabels(db, t.ID)
 		if err != nil {
@@ -482,7 +484,7 @@ func (s *BoardService) listTasksByBucket(db *sql.DB, bucketID int64) ([]models.T
 }
 
 func (s *BoardService) setTaskLabels(db *sql.DB, taskID int64, labelsStr string) {
-	db.Exec("DELETE FROM task_labels WHERE task_id = ?", taskID)
+	db.Exec("DELETE FROM task_labels WHERE task_id = $1", taskID)
 	if labelsStr == "" {
 		return
 	}
@@ -494,7 +496,7 @@ func (s *BoardService) setTaskLabels(db *sql.DB, taskID int64, labelsStr string)
 		}
 		var labelID int64
 		if _, err := fmt.Sscanf(p, "%d", &labelID); err == nil {
-			db.Exec("INSERT OR IGNORE INTO task_labels (task_id, label_id) VALUES (?, ?)", taskID, labelID)
+			db.Exec("INSERT INTO task_labels (task_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", taskID, labelID)
 		}
 	}
 }

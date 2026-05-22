@@ -32,7 +32,7 @@ func NewTokenService(db *sql.DB) *TokenService {
 	return &TokenService{DB: db}
 }
 
-func (s *TokenService) Create(name string, permissions string) (*CreateTokenResult, error) {
+func (s *TokenService) Create(name string, userID int64, permissions string) (*CreateTokenResult, error) {
 	if name == "" {
 		return nil, errors.New("name is required")
 	}
@@ -49,16 +49,17 @@ func (s *TokenService) Create(name string, permissions string) (*CreateTokenResu
 		permissions = `["read","write"]`
 	}
 
-	result, err := s.DB.Exec(
-		`INSERT INTO api_tokens (name, token_hash, prefix, permissions)
-		 VALUES (?, ?, ?, ?)`,
-		name, hashHex, prefix, permissions,
-	)
+	var id int64
+	var createdAt string
+	err := s.DB.QueryRow(
+		`INSERT INTO api_tokens (name, token_hash, prefix, permissions, user_id)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING id, created_at`,
+		name, hashHex, prefix, permissions, userID,
+	).Scan(&id, &createdAt)
 	if err != nil {
 		return nil, err
 	}
-
-	id, _ := result.LastInsertId()
 
 	return &CreateTokenResult{
 		Token: token,
@@ -67,14 +68,15 @@ func (s *TokenService) Create(name string, permissions string) (*CreateTokenResu
 			Name:        name,
 			Prefix:      prefix,
 			Permissions: permissions,
+			CreatedAt:   createdAt,
 		},
 	}, nil
 }
 
-func (s *TokenService) List() ([]TokenInfo, error) {
+func (s *TokenService) List(userID int64) ([]TokenInfo, error) {
 	rows, err := s.DB.Query(
-		`SELECT id, name, prefix, permissions, COALESCE(last_used, ''), created_at
-		 FROM api_tokens ORDER BY created_at DESC`,
+		`SELECT id, name, prefix, permissions, COALESCE(last_used::text, ''), created_at
+		 FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC`, userID,
 	)
 	if err != nil {
 		return nil, err
@@ -92,8 +94,8 @@ func (s *TokenService) List() ([]TokenInfo, error) {
 	return tokens, nil
 }
 
-func (s *TokenService) Delete(id int64) error {
-	result, err := s.DB.Exec("DELETE FROM api_tokens WHERE id = ?", id)
+func (s *TokenService) Delete(id int64, userID int64) error {
+	result, err := s.DB.Exec("DELETE FROM api_tokens WHERE id = $1 AND user_id = $2", id, userID)
 	if err != nil {
 		return err
 	}

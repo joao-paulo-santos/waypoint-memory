@@ -12,12 +12,7 @@
 	let newToken = $state(null);
 	let copied = $state(false);
 
-	let hasPassword = $state(false);
-	let showPasswordModal = $state(false);
-	let newPassword = $state('');
-	let confirmPassword = $state('');
-	let passwordError = $state('');
-	let passwordSuccess = $state(false);
+	let currentUser = $state(null);
 
 	async function load() {
 		loading = true;
@@ -25,10 +20,10 @@
 		try {
 			const [tData, aData] = await Promise.all([
 				api.get('/api/v1/tokens'),
-				fetch('/api/v1/auth/status').then(r => r.json())
+				api.get('/api/v1/auth/status')
 			]);
 			tokens = tData.tokens || [];
-			hasPassword = aData.has_password;
+			if (aData.authenticated) currentUser = aData.user;
 		} catch (e) {
 			error = e.message;
 		} finally {
@@ -76,53 +71,18 @@
 		if (!d) return 'Never';
 		return d.slice(0, 10);
 	}
-
-	async function setPassword() {
-		passwordError = '';
-		if (newPassword.length < 4) {
-			passwordError = 'Password must be at least 4 characters';
-			return;
-		}
-		if (newPassword !== confirmPassword) {
-			passwordError = 'Passwords do not match';
-			return;
-		}
-		try {
-			await fetch('/api/v1/auth/set-password', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ password: newPassword })
-			});
-			showPasswordModal = false;
-			newPassword = '';
-			confirmPassword = '';
-			passwordSuccess = true;
-			hasPassword = true;
-			setTimeout(() => (passwordSuccess = false), 3000);
-		} catch (e) {
-			passwordError = e.message;
-		}
-	}
 </script>
 
 <h2 class="text-2xl font-bold mb-6">Settings</h2>
 
 <div class="max-w-3xl space-y-8">
 	<div>
-		<h3 class="text-lg font-semibold mb-3">Password Protection</h3>
-		<p class="text-sm text-gray-400 mb-3">
-			{#if hasPassword}
-				Password protection is <span class="text-green-400 font-medium">enabled</span>. A password is required to access the web UI.
-			{:else}
-				No password set. The web UI is publicly accessible. Set a password to protect it.
-			{/if}
-		</p>
-		{#if passwordSuccess}
-			<p class="text-sm text-green-400 mb-3">Password set successfully.</p>
+		<h3 class="text-lg font-semibold mb-3">Account</h3>
+		{#if currentUser}
+			<p class="text-sm text-gray-400">Logged in as <span class="text-white font-medium">{currentUser.username}</span></p>
+		{:else}
+			<p class="text-sm text-gray-400">Loading user info...</p>
 		{/if}
-		<button onclick={() => { showPasswordModal = true; passwordError = ''; newPassword = ''; confirmPassword = ''; }} class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm">
-			{hasPassword ? 'Change Password' : 'Set Password'}
-		</button>
 	</div>
 
 	<div>
@@ -180,34 +140,11 @@
 	</div>
 </div>
 
-{#if showPasswordModal}
-	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onclick={() => (showPasswordModal = false)}>
-		<div class="bg-gray-800 rounded-lg p-6 w-[400px]" onclick={(e) => e.stopPropagation()}>
-			<h3 class="text-lg font-bold mb-4">{hasPassword ? 'Change' : 'Set'} Password</h3>
-			<div class="space-y-3">
-				<div>
-					<label for="pw-new" class="block text-sm text-gray-400 mb-1">New Password</label>
-					<input id="pw-new" type="password" bind:value={newPassword} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" />
-				</div>
-				<div>
-					<label for="pw-confirm" class="block text-sm text-gray-400 mb-1">Confirm Password</label>
-					<input id="pw-confirm" type="password" bind:value={confirmPassword} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" />
-				</div>
-				{#if passwordError}
-					<p class="text-red-400 text-sm">{passwordError}</p>
-				{/if}
-			</div>
-			<div class="flex justify-end gap-2 mt-6">
-				<button onclick={() => (showPasswordModal = false)} class="px-3 py-1 bg-gray-700 rounded text-sm">Cancel</button>
-				<button onclick={setPassword} class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm">Save</button>
-			</div>
-		</div>
-	</div>
-{/if}
-
 {#if showCreate}
-	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onclick={() => (showCreate = false)}>
-		<div class="bg-gray-800 rounded-lg p-6 w-[400px]" onclick={(e) => e.stopPropagation()}>
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onclick={() => (showCreate = false)} onkeydown={(e) => { if (e.key === 'Escape') showCreate = false; }}>
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="bg-gray-800 rounded-lg p-6 w-[400px]" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<h3 class="text-lg font-bold mb-4">Generate API Token</h3>
 			<div class="space-y-3">
 				<div>

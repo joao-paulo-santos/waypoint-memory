@@ -12,23 +12,19 @@
 	let editing = $state(false);
 	let form = $state({});
 
-	let birthday = $state(null);
-	let showBirthdayModal = $state(false);
-	let bdayForm = $state({ name: '', date: '', year: '', notes: '' });
-
 	async function load() {
 		loading = true;
 		error = '';
 		try {
 			contact = await api.get(`/api/v1/contacts/${id}`);
 			form = { ...contact };
-
-			const bdata = await api.get('/api/v1/birthdays');
-			const all = bdata.birthdays || [];
-			birthday = all.find((b) => b.contact_id && b.contact_id === contact.id) || null;
-			if (birthday) {
-				const year = birthday.year || new Date().getFullYear();
-				bdayForm = { name: birthday.name, date: `${year}-${birthday.date}`, year: birthday.year || '', notes: birthday.notes || '' };
+			if (contact.birthday_date) {
+				const parts = contact.birthday_date.split('-');
+				form.birthday_month = parts[0] || '';
+				form.birthday_day = parts[1] || '';
+			} else {
+				form.birthday_month = '';
+				form.birthday_day = '';
 			}
 		} catch (e) {
 			error = e.message;
@@ -42,9 +38,14 @@
 	async function saveContact() {
 		try {
 			const body = {};
-			for (const key of ['first_name', 'last_name', 'email', 'phone', 'company', 'role', 'notes', 'tags']) {
+			for (const key of ['first_name', 'last_name', 'email', 'phone', 'company', 'role', 'notes', 'tags', 'birthday_notes']) {
 				if (form[key] !== contact[key]) body[key] = form[key];
 			}
+			const newDate = (form.birthday_month && form.birthday_day) ? `${form.birthday_month}-${form.birthday_day}` : '';
+			if (newDate !== (contact.birthday_date || '')) body.birthday_date = newDate;
+			const byr = form.birthday_year ? parseInt(form.birthday_year) : null;
+			const origByr = contact.birthday_year || null;
+			if (byr !== origByr) body.birthday_year = byr;
 			if (Object.keys(body).length > 0) {
 				contact = await api.put(`/api/v1/contacts/${id}`, body);
 			}
@@ -64,37 +65,21 @@
 		}
 	}
 
-	async function addBirthday() {
-		if (!bdayForm.date) return;
-		try {
-			const body = { name: bdayForm.name, date: bdayForm.date.slice(5), contact_id: parseInt(id) };
-			if (bdayForm.year) body.year = parseInt(bdayForm.year);
-			if (bdayForm.notes) body.notes = bdayForm.notes;
-			await api.post('/api/v1/birthdays', body);
-			showBirthdayModal = false;
-			await load();
-		} catch (e) {
-			alert(e.message);
-		}
-	}
-
-	async function deleteBirthday() {
-		if (!birthday || !confirm('Remove this birthday?')) return;
-		try {
-			await api.del(`/api/v1/birthdays/${birthday.id}`);
-			birthday = null;
-		} catch (e) {
-			alert(e.message);
-		}
-	}
-
 	function parseTags(tags) {
 		if (!tags) return [];
 		return tags.split(',').map((t) => t.trim()).filter(Boolean);
 	}
 
-	function field(label, key) {
-		return { label, value: contact?.[key] };
+	function formatBirthday(c) {
+		if (!c.birthday_date) return '';
+		const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+		const parts = c.birthday_date.split('-');
+		if (parts.length !== 2) return c.birthday_date;
+		const m = parseInt(parts[0]) - 1;
+		const d = parts[1];
+		let str = `${months[m]} ${d}`;
+		if (c.birthday_year) str += `, ${c.birthday_year}`;
+		return str;
 	}
 </script>
 
@@ -113,7 +98,7 @@
 			<div class="flex gap-2">
 				{#if editing}
 					<button onclick={saveContact} class="px-3 py-1.5 bg-green-600 hover:bg-green-700 rounded text-sm">Save</button>
-					<button onclick={() => { editing = false; form = { ...contact }; }} class="px-3 py-1.5 bg-gray-700 rounded text-sm">Cancel</button>
+					<button onclick={() => { editing = false; form = { ...contact, birthday_month: contact.birthday_date ? contact.birthday_date.split('-')[0] : '', birthday_day: contact.birthday_date ? contact.birthday_date.split('-')[1] : '' }; }} class="px-3 py-1.5 bg-gray-700 rounded text-sm">Cancel</button>
 				{:else}
 					<button onclick={() => (editing = true)} class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm">Edit</button>
 					<button onclick={deleteContact} class="px-3 py-1.5 bg-red-600 hover:bg-red-700 rounded text-sm">Delete</button>
@@ -153,6 +138,47 @@
 						<input id="ed-role" bind:value={form.role} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" />
 					</div>
 				</div>
+				<div class="border-t border-gray-700 pt-3">
+					<h4 class="text-sm font-semibold text-purple-400 mb-2">Birthday</h4>
+					<div class="flex gap-3">
+						<div class="flex-1">
+							<label for="ed-bmonth" class="block text-sm text-gray-400 mb-1">Month</label>
+							<select id="ed-bmonth" bind:value={form.birthday_month} class="w-full p-2 bg-gray-700 border border-gray-600 rounded">
+								<option value="">--</option>
+								<option value="01">January</option>
+								<option value="02">February</option>
+								<option value="03">March</option>
+								<option value="04">April</option>
+								<option value="05">May</option>
+								<option value="06">June</option>
+								<option value="07">July</option>
+								<option value="08">August</option>
+								<option value="09">September</option>
+								<option value="10">October</option>
+								<option value="11">November</option>
+								<option value="12">December</option>
+							</select>
+						</div>
+						<div class="flex-1">
+							<label for="ed-bday" class="block text-sm text-gray-400 mb-1">Day</label>
+							<select id="ed-bday" bind:value={form.birthday_day} class="w-full p-2 bg-gray-700 border border-gray-600 rounded">
+								<option value="">--</option>
+								{#each Array(31) as _, i}
+									{@const d = String(i + 1).padStart(2, '0')}
+									<option value={d}>{i + 1}</option>
+								{/each}
+							</select>
+						</div>
+						<div class="flex-1">
+							<label for="ed-byear" class="block text-sm text-gray-400 mb-1">Birth Year</label>
+							<input id="ed-byear" type="number" bind:value={form.birthday_year} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" placeholder="1990" />
+						</div>
+					</div>
+					<div class="mt-2">
+						<label for="ed-bnotes" class="block text-sm text-gray-400 mb-1">Birthday Notes</label>
+						<input id="ed-bnotes" bind:value={form.birthday_notes} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" placeholder="Gift ideas, preferences..." />
+					</div>
+				</div>
 				<div>
 					<label for="ed-tags" class="block text-sm text-gray-400 mb-1">Tags (comma separated)</label>
 					<input id="ed-tags" bind:value={form.tags} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" />
@@ -172,6 +198,18 @@
 						</div>
 					{/if}
 				{/each}
+				{#if contact.birthday_date}
+					<div class="flex">
+						<span class="w-24 text-gray-500 text-sm shrink-0">Birthday</span>
+						<span class="text-sm">&#127874; {formatBirthday(contact)}</span>
+					</div>
+				{/if}
+				{#if contact.birthday_notes}
+					<div class="flex">
+						<span class="w-24 text-gray-500 text-sm shrink-0">Bday Notes</span>
+						<span class="text-sm">{contact.birthday_notes}</span>
+					</div>
+				{/if}
 				{#if parseTags(contact.tags).length > 0}
 					<div class="flex">
 						<span class="w-24 text-gray-500 text-sm shrink-0">Tags</span>
@@ -190,60 +228,5 @@
 				{/if}
 			</div>
 		{/if}
-
-		<div class="mt-6">
-			<div class="flex items-center justify-between mb-3">
-				<h3 class="text-lg font-semibold">Birthday</h3>
-				{#if !birthday}
-					<button onclick={() => {
-						bdayForm = { name: `${contact.first_name} ${contact.last_name || ''}`.trim(), date: '', year: '', notes: '' };
-						showBirthdayModal = true;
-					}} class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">+ Add Birthday</button>
-				{/if}
-			</div>
-			{#if birthday}
-				<div class="bg-gray-800 rounded-lg p-3 flex items-center justify-between">
-					<div class="flex items-center gap-2">
-						<span class="text-xl">&#127874;</span>
-						<div>
-							<span class="font-medium">{birthday.name}</span>
-							<span class="text-sm text-gray-400 ml-2">{birthday.date}</span>
-							{#if birthday.year}
-								<span class="text-xs text-gray-500 ml-1">(born {birthday.year})</span>
-							{/if}
-						</div>
-					</div>
-					<button onclick={deleteBirthday} class="text-gray-500 hover:text-red-400 text-sm" title="Remove birthday">&#128465;</button>
-				</div>
-			{:else}
-				<p class="text-gray-500 text-sm">No birthday linked to this contact.</p>
-			{/if}
-		</div>
-	</div>
-{/if}
-
-{#if showBirthdayModal}
-	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onclick={() => (showBirthdayModal = false)}>
-		<div class="bg-gray-800 rounded-lg p-6 w-[400px]" onclick={(e) => e.stopPropagation()}>
-			<h3 class="text-lg font-bold mb-4">Add Birthday for {contact?.first_name}</h3>
-			<div class="space-y-3">
-				<div>
-					<label for="bd-modal-name" class="block text-sm text-gray-400 mb-1">Name</label>
-					<input id="bd-modal-name" bind:value={bdayForm.name} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" />
-				</div>
-				<div>
-					<label for="bd-modal-date" class="block text-sm text-gray-400 mb-1">Date</label>
-					<input id="bd-modal-date" type="date" bind:value={bdayForm.date} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" />
-				</div>
-				<div>
-					<label for="bd-modal-year" class="block text-sm text-gray-400 mb-1">Birth Year (optional)</label>
-					<input id="bd-modal-year" type="number" bind:value={bdayForm.year} class="w-full p-2 bg-gray-700 border border-gray-600 rounded" />
-				</div>
-			</div>
-			<div class="flex justify-end gap-2 mt-6">
-				<button onclick={() => (showBirthdayModal = false)} class="px-3 py-1 bg-gray-700 rounded text-sm">Cancel</button>
-				<button onclick={addBirthday} class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm">Add</button>
-			</div>
-		</div>
 	</div>
 {/if}
