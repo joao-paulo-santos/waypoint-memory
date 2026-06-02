@@ -451,6 +451,83 @@ func (s *BoardService) ReorderTasks(db *sql.DB, projectID int64, req models.Reor
 	return tx.Commit()
 }
 
+func (s *BoardService) ListTasksByProject(db *sql.DB, projectID int64) ([]models.Task, error) {
+	rows, err := db.Query(
+		`SELECT t.id, t.project_id, t.bucket_id, t.sprint_id, t.title, t.description, t.position, t.priority, t.due_date,
+		        t.done, t.done_at, t.created_by, t.created_at, t.updated_at,
+		        b.title AS bucket_title,
+		        COALESCE((SELECT string_agg(l.title, ', ') FROM task_labels tl JOIN labels l ON l.id = tl.label_id WHERE tl.task_id = t.id), '') AS label_names
+		 FROM tasks t
+		 JOIN buckets b ON b.id = t.bucket_id
+		 WHERE t.project_id = $1 AND t.sprint_id IS NULL
+		 ORDER BY t.bucket_id, t.position`, projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []models.Task
+	for rows.Next() {
+		var t models.Task
+		if err := rows.Scan(&t.ID, &t.ProjectID, &t.BucketID, &t.SprintID, &t.Title, &t.Description, &t.Position,
+			&t.Priority, &t.DueDate, &t.Done, &t.DoneAt, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
+			&t.BucketTitle, &t.LabelNames); err != nil {
+			return nil, err
+		}
+		t.DescriptionPreview = truncPreview(t.Description, 100)
+		tasks = append(tasks, t)
+	}
+	return tasks, nil
+}
+
+func (s *BoardService) BulkMoveTasks(db *sql.DB, projectID int64, taskIDs []int64, targetBucketID int64) ([]models.Task, error) {
+	var isDone bool
+	err := db.QueryRow("SELECT is_done_bucket FROM buckets WHERE id = $1 AND project_id = $2", targetBucketID, projectID).Scan(&isDone)
+	if err != nil {
+		return nil, ErrBucketNotFound
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	for _, tid := range taskIDs {
+		if isDone {
+			_, err = tx.Exec("UPDATE tasks SET bucket_id = $1, done = TRUE, done_at = NOW(), updated_at = NOW() WHERE id = $2 AND project_id = $3 AND sprint_id IS NULL", targetBucketID, tid, projectID)
+		} else {
+			_, err = tx.Exec("UPDATE tasks SET bucket_id = $1, updated_at = NOW() WHERE id = $2 AND project_id = $3 AND sprint_id IS NULL", targetBucketID, tid, projectID)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	if s.Activity != nil {
+		s.Activity.LogActivity(db, projectID, LogActivityParams{
+			Action:     "tasks_bulk_moved",
+			EntityType: "task",
+			Details:    map[string]any{"task_ids": taskIDs, "to_bucket": targetBucketID},
+			Actor:      "ai",
+		})
+	}
+
+	return s.ListTasksByProject(db, projectID)
+}
+
+func truncPreview(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
 func (s *BoardService) listTasksByBucket(db *sql.DB, bucketID int64) ([]models.Task, error) {
 	rows, err := db.Query(
 		`SELECT id, project_id, bucket_id, sprint_id, title, description, position, priority, due_date,
@@ -478,6 +555,7 @@ func (s *BoardService) listTasksByBucket(db *sql.DB, bucketID int64) ([]models.T
 		if labels != nil {
 			t.Labels = labels
 		}
+		t.DescriptionPreview = truncPreview(t.Description, 100)
 		tasks = append(tasks, t)
 	}
 	return tasks, nil

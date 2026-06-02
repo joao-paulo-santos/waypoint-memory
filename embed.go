@@ -29,10 +29,17 @@ func frontendFileServer() http.Handler {
 		if err != nil {
 			data, _ := frontendFS.ReadFile("frontend/build/index.html")
 			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			w.Write(data)
 			return
 		}
 		f.Close()
+
+		if strings.HasPrefix(r.URL.Path, "/_app/immutable/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else if path == "index.html" {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		}
 
 		fileServer.ServeHTTP(w, r)
 	})

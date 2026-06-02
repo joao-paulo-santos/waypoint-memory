@@ -9,3 +9,4 @@ phases/
 .fuse_hidden*
 frontend/build/
 .env
+session-ses_*.md

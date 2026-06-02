@@ -1,6 +1,7 @@
 services:
   waypointmemory:
     container_name: waypointmemory
+    image: waypointmemory:latest
     build: .
     networks:
       proxy-net:

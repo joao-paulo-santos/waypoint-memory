@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/joao-paulo-santos/waypoint-memory/models"
@@ -10,6 +12,8 @@ import (
 
 func (s *MCPServer) registerTools() {
 	s.Server.AddTool(s.listProjectsTool(), s.handleListProjects)
+	s.Server.AddTool(s.createProjectTool(), s.handleCreateProject)
+	s.Server.AddTool(s.deleteProjectTool(), s.handleDeleteProject)
 	s.Server.AddTool(s.getProjectContextTool(), s.handleGetProjectContext)
 
 	s.Server.AddTool(s.listBucketsTool(), s.handleListBuckets)
@@ -20,7 +24,9 @@ func (s *MCPServer) registerTools() {
 	s.Server.AddTool(s.createTaskTool(), s.handleCreateTask)
 	s.Server.AddTool(s.updateTaskTool(), s.handleUpdateTask)
 	s.Server.AddTool(s.moveTaskTool(), s.handleMoveTask)
+	s.Server.AddTool(s.bulkMoveTasksTool(), s.handleBulkMoveTasks)
 	s.Server.AddTool(s.deleteTaskTool(), s.handleDeleteTask)
+	s.Server.AddTool(s.listTasksTool(), s.handleListTasks)
 
 	s.Server.AddTool(s.archiveSprintTool(), s.handleArchiveSprint)
 	s.Server.AddTool(s.listSprintsTool(), s.handleListSprints)
@@ -82,6 +88,59 @@ func (s *MCPServer) handleListProjects(_ context.Context, _ mcp.CallToolRequest)
 	}
 
 	return toolResult(map[string]any{"projects": result})
+}
+
+// --- create_project ---
+
+func (s *MCPServer) createProjectTool() mcp.Tool {
+	return mcp.NewTool("create_project",
+		mcp.WithDescription("Create a new project. Default buckets (Backlog, In Progress, Done) are created automatically."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Project name")),
+		mcp.WithString("description", mcp.Description("Project description")),
+		mcp.WithString("color", mcp.Description("Project color (hex, e.g. #FF0000)")),
+		mcp.WithString("icon", mcp.Description("Project icon")),
+	)
+}
+
+func (s *MCPServer) handleCreateProject(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := requireString(req, "name")
+	if err != nil {
+		return toolError("%v", err)
+	}
+
+	ownerID := s.getDefaultOwnerID()
+	project, err := s.ProjectSvc.Create(models.CreateProjectRequest{
+		Name:        name,
+		Description: getString(req, "description", ""),
+		Color:       getString(req, "color", ""),
+		Icon:        getString(req, "icon", ""),
+	}, ownerID)
+	if err != nil {
+		return toolError("create project: %v", err)
+	}
+	return toolResult(project)
+}
+
+// --- delete_project ---
+
+func (s *MCPServer) deleteProjectTool() mcp.Tool {
+	return mcp.NewTool("delete_project",
+		mcp.WithDescription("Delete a project and all its tasks, buckets, labels, wiki pages, and activity logs."),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithInteger("project_id", mcp.Required(), mcp.Description("The project ID")),
+	)
+}
+
+func (s *MCPServer) handleDeleteProject(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	pid, err := requireInt(req, "project_id")
+	if err != nil {
+		return toolError("%v", err)
+	}
+
+	if err := s.ProjectSvc.Delete(pid); err != nil {
+		return toolError("delete project: %v", err)
+	}
+	return toolResult(map[string]string{"status": "deleted"})
 }
 
 // --- get_project_context ---
@@ -266,7 +325,7 @@ func (s *MCPServer) handleDeleteBucket(_ context.Context, req mcp.CallToolReques
 
 func (s *MCPServer) createTaskTool() mcp.Tool {
 	return mcp.NewTool("create_task",
-		mcp.WithDescription("Create a new task in a project's Kanban board."),
+		mcp.WithDescription("Create a new task in a project's Kanban board. NOTE: if the target bucket is a done bucket (is_done_bucket=true), the task will automatically be marked done with done_at set to now."),
 		mcp.WithInteger("project_id", mcp.Required(), mcp.Description("The project ID")),
 		mcp.WithInteger("bucket_id", mcp.Required(), mcp.Description("The bucket ID")),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Task title")),
@@ -374,7 +433,7 @@ func (s *MCPServer) handleUpdateTask(_ context.Context, req mcp.CallToolRequest)
 
 func (s *MCPServer) moveTaskTool() mcp.Tool {
 	return mcp.NewTool("move_task",
-		mcp.WithDescription("Move a task to a different bucket."),
+		mcp.WithDescription("Move a task to a different bucket. NOTE: if the target bucket is a done bucket (is_done_bucket=true), the task will automatically be marked done. If moving FROM a done bucket to a non-done bucket, the task will be un-marked done."),
 		mcp.WithInteger("project_id", mcp.Required(), mcp.Description("The project ID")),
 		mcp.WithInteger("task_id", mcp.Required(), mcp.Description("The task ID")),
 		mcp.WithInteger("bucket_id", mcp.Required(), mcp.Description("Target bucket ID")),
@@ -690,4 +749,102 @@ func (s *MCPServer) handleCreateEvent(_ context.Context, req mcp.CallToolRequest
 		return toolError("create event: %v", err)
 	}
 	return toolResult(event)
+}
+
+// --- list_tasks ---
+
+func (s *MCPServer) listTasksTool() mcp.Tool {
+	return mcp.NewTool("list_tasks",
+		mcp.WithDescription("List all tasks in a project as a flat list with description preview (100 chars), priority, bucket title, and label names. Includes done and not-done tasks (excluding archived sprint tasks)."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithInteger("project_id", mcp.Required(), mcp.Description("The project ID")),
+	)
+}
+
+func (s *MCPServer) handleListTasks(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	pid, err := requireInt(req, "project_id")
+	if err != nil {
+		return toolError("%v", err)
+	}
+
+	tasks, err := s.BoardSvc.ListTasksByProject(s.DB, pid)
+	if err != nil {
+		return toolError("list tasks: %v", err)
+	}
+
+	type flatTask struct {
+		ID                 int64   `json:"id"`
+		BucketTitle        string  `json:"bucket"`
+		Title              string  `json:"title"`
+		DescriptionPreview string  `json:"description_preview"`
+		Priority           int     `json:"priority"`
+		DueDate            *string `json:"due_date,omitempty"`
+		Done               bool    `json:"done"`
+		LabelNames         string  `json:"labels,omitempty"`
+		CreatedBy          string  `json:"created_by"`
+	}
+
+	result := make([]flatTask, 0, len(tasks))
+	for _, t := range tasks {
+		result = append(result, flatTask{
+			ID:                 t.ID,
+			BucketTitle:        t.BucketTitle,
+			Title:              t.Title,
+			DescriptionPreview: t.DescriptionPreview,
+			Priority:           t.Priority,
+			DueDate:            t.DueDate,
+			Done:               t.Done,
+			LabelNames:         t.LabelNames,
+			CreatedBy:          t.CreatedBy,
+		})
+	}
+	return toolResult(map[string]any{"tasks": result})
+}
+
+// --- bulk_move_tasks ---
+
+func (s *MCPServer) bulkMoveTasksTool() mcp.Tool {
+	return mcp.NewTool("bulk_move_tasks",
+		mcp.WithDescription("Move multiple tasks to a different bucket in one call. NOTE: if the target bucket is a done bucket (is_done_bucket=true), all tasks will automatically be marked done."),
+		mcp.WithInteger("project_id", mcp.Required(), mcp.Description("The project ID")),
+		mcp.WithString("task_ids", mcp.Required(), mcp.Description("Comma-separated task IDs to move")),
+		mcp.WithInteger("bucket_id", mcp.Required(), mcp.Description("Target bucket ID")),
+	)
+}
+
+func (s *MCPServer) handleBulkMoveTasks(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	pid, err := requireInt(req, "project_id")
+	if err != nil {
+		return toolError("%v", err)
+	}
+	bid, err := requireInt(req, "bucket_id")
+	if err != nil {
+		return toolError("%v", err)
+	}
+	taskIDsStr, err := requireString(req, "task_ids")
+	if err != nil {
+		return toolError("%v", err)
+	}
+
+	var taskIDs []int64
+	for _, p := range strings.Split(taskIDsStr, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		var id int64
+		if _, err := fmt.Sscanf(p, "%d", &id); err == nil {
+			taskIDs = append(taskIDs, id)
+		}
+	}
+
+	if len(taskIDs) == 0 {
+		return toolError("no valid task IDs provided")
+	}
+
+	tasks, err := s.BoardSvc.BulkMoveTasks(s.DB, pid, taskIDs, bid)
+	if err != nil {
+		return toolError("bulk move: %v", err)
+	}
+	return toolResult(map[string]any{"moved": len(taskIDs), "tasks": tasks})
 }

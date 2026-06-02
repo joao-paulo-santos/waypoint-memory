@@ -14,8 +14,11 @@ type Task struct {
 	DoneAt      *string  `json:"done_at"`
 	CreatedBy   string   `json:"created_by"`
 	Labels      []Label  `json:"labels,omitempty"`
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
+	CreatedAt          string   `json:"created_at"`
+	UpdatedAt          string   `json:"updated_at"`
+	DescriptionPreview string  `json:"description_preview,omitempty"`
+	LabelNames         string  `json:"label_names,omitempty"`
+	BucketTitle        string  `json:"bucket_title,omitempty"`
 }
 
 type CreateTaskRequest struct {

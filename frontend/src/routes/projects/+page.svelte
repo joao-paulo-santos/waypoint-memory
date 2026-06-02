@@ -68,6 +68,18 @@
 			newError = e.message;
 		}
 	}
+
+	async function deleteProject(project, e) {
+		e.preventDefault();
+		e.stopPropagation();
+		if (!confirm(`Delete "${project.name}" and all its data? This cannot be undone.`)) return;
+		try {
+			await api.del(`/api/v1/projects/${project.id}`);
+			projects = projects.filter(p => p.id !== project.id);
+		} catch (err) {
+			alert(err.message);
+		}
+	}
 </script>
 
 <svelte:window onclick={onWindowClick} />
@@ -125,7 +137,10 @@
 {:else}
 	<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
 		{#each projects as project (project.id)}
-			<a href="/projects/{project.id}" class="block p-4 bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition-colors">
+			<a href="/projects/{project.id}" class="block p-4 bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition-colors group relative">
+				<button onclick={(e) => deleteProject(project, e)} class="absolute top-2 right-2 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" title="Delete project">
+					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+				</button>
 				<div class="flex items-center gap-2 mb-1">
 					{#if project.color}
 						<span class="w-3 h-3 rounded-full shrink-0" style="background: {project.color}"></span>
