@@ -13,6 +13,7 @@ import (
 func (s *MCPServer) registerTools() {
 	s.Server.AddTool(s.listProjectsTool(), s.handleListProjects)
 	s.Server.AddTool(s.createProjectTool(), s.handleCreateProject)
+	s.Server.AddTool(s.updateProjectTool(), s.handleUpdateProject)
 	s.Server.AddTool(s.deleteProjectTool(), s.handleDeleteProject)
 	s.Server.AddTool(s.getProjectContextTool(), s.handleGetProjectContext)
 
@@ -117,6 +118,54 @@ func (s *MCPServer) handleCreateProject(_ context.Context, req mcp.CallToolReque
 	}, ownerID)
 	if err != nil {
 		return toolError("create project: %v", err)
+	}
+	return toolResult(project)
+}
+
+// --- update_project ---
+
+func (s *MCPServer) updateProjectTool() mcp.Tool {
+	return mcp.NewTool("update_project",
+		mcp.WithDescription("Update a project's metadata. Only provided fields are changed. If slug is set, it will be slugified and must be unique."),
+		mcp.WithInteger("project_id", mcp.Required(), mcp.Description("The project ID")),
+		mcp.WithString("name", mcp.Description("New project name")),
+		mcp.WithString("slug", mcp.Description("New slug (will be slugified, must be unique)")),
+		mcp.WithString("description", mcp.Description("New description")),
+		mcp.WithString("color", mcp.Description("New color (hex, e.g. #FF0000)")),
+		mcp.WithString("icon", mcp.Description("New icon")),
+		mcp.WithBoolean("is_archived", mcp.Description("Archive/unarchive project")),
+	)
+}
+
+func (s *MCPServer) handleUpdateProject(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	pid, err := requireInt(req, "project_id")
+	if err != nil {
+		return toolError("%v", err)
+	}
+
+	updateReq := models.UpdateProjectRequest{}
+	if v := getNullableString(req, "name"); v != nil {
+		updateReq.Name = v
+	}
+	if v := getNullableString(req, "slug"); v != nil {
+		updateReq.Slug = v
+	}
+	if v := getNullableString(req, "description"); v != nil {
+		updateReq.Description = v
+	}
+	if v := getNullableString(req, "color"); v != nil {
+		updateReq.Color = v
+	}
+	if v := getNullableString(req, "icon"); v != nil {
+		updateReq.Icon = v
+	}
+	if v := getNullableBool(req, "is_archived"); v != nil {
+		updateReq.IsArchived = v
+	}
+
+	project, err := s.ProjectSvc.Update(pid, updateReq)
+	if err != nil {
+		return toolError("update project: %v", err)
 	}
 	return toolResult(project)
 }

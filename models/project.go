@@ -23,6 +23,7 @@ type CreateProjectRequest struct {
 
 type UpdateProjectRequest struct {
 	Name        *string `json:"name,omitempty"`
+	Slug        *string `json:"slug,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Color       *string `json:"color,omitempty"`
 	Icon        *string `json:"icon,omitempty"`

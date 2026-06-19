@@ -125,6 +125,15 @@ func (s *ProjectService) Update(id int64, req models.UpdateProjectRequest) (*mod
 		args = append(args, *req.Name)
 		paramIdx++
 	}
+	if req.Slug != nil {
+		slug := s.generateSlug(*req.Slug)
+		if !s.isSlugAvailable(slug) {
+			return nil, ErrProjectAlreadyRegistered
+		}
+		sets = append(sets, fmt.Sprintf("slug = $%d", paramIdx))
+		args = append(args, slug)
+		paramIdx++
+	}
 	if req.Description != nil {
 		sets = append(sets, fmt.Sprintf("description = $%d", paramIdx))
 		args = append(args, *req.Description)
